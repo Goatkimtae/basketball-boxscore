@@ -104,3 +104,20 @@ def test_reanalysis_keeps_manual_edits():
     new = [dict(ev(4.1, "A", "야투", "2점", "성공"), source="자동")]
     merged = project.merge_reanalysis(old, new)
     assert [(e["time"], e["source"]) for e in merged] == [(4.1, "자동"), (5, "수동")]
+
+
+def test_video_with_korean_file_name(tmp_path):
+    import cv2
+    ascii_file = tmp_path / "clip.avi"
+    w = cv2.VideoWriter(str(ascii_file), cv2.VideoWriter_fourcc(*"MJPG"), 10, (320, 180))
+    for i in range(20):
+        frame = np.full((180, 320, 3), (i * 10) % 255, np.uint8)
+        w.write(frame)
+    w.release()
+    korean = tmp_path / "우리 체육관 경기 영상.avi"
+    os.replace(ascii_file, korean)
+    v = engine.Video(str(korean))
+    assert v.proc_size[0] == engine.PROC_W
+    frames = list(v.iter(step=1))
+    assert len(frames) == 20
+    assert v.frame_at(1.0) is not None

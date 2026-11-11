@@ -44,7 +44,10 @@ class GymProfile:
         path = os.path.join(folder, self.name)
         os.makedirs(path, exist_ok=True)
         for side, tpl in self.templates.items():
-            cv2.imwrite(os.path.join(path, f"{'left' if side == '왼쪽' else 'right'}.png"), tpl)
+            ok, buf = cv2.imencode(".png", tpl)   # cv2.imwrite cannot write Korean paths on Windows
+            if not ok:
+                raise IOError("골대 그림을 저장하지 못했습니다.")
+            buf.tofile(os.path.join(path, f"{'left' if side == '왼쪽' else 'right'}.png"))
         with open(os.path.join(path, "profile.json"), "w", encoding="utf-8") as fh:
             json.dump({"name": self.name, "sides": list(self.templates)}, fh, ensure_ascii=False)
         return path
@@ -72,10 +75,47 @@ class GymProfile:
 
 
 # ---------------------------------------------------------------- video
+def opencv_path(path: str) -> str:
+    """OpenCV on Windows cannot open file names with Korean (non-ASCII) characters.
+    Use the short 8.3 name, or else a hard link / copy in an ASCII-named folder."""
+    if os.name != "nt" or path.isascii():
+        return path
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, 32768) and buf.value.isascii():
+            return buf.value
+    except (AttributeError, OSError):
+        pass
+    import hashlib
+    import shutil
+    import tempfile
+    st = os.stat(path)
+    tag = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime}".encode("utf-8")).hexdigest()[:12]
+    name = f"hoopstat_{tag}{os.path.splitext(path)[1] if os.path.splitext(path)[1].isascii() else '.mp4'}"
+    folders = [tempfile.gettempdir(), os.environ.get("PUBLIC", ""), os.path.join(os.environ.get("SystemDrive", "C:") + os.sep, "HoopStatTemp")]
+    for d in folders:
+        if not d or not d.isascii():
+            continue
+        try:
+            os.makedirs(d, exist_ok=True)
+            target = os.path.join(d, name)
+            if not os.path.exists(target):
+                try:
+                    os.link(path, target)
+                except OSError:
+                    shutil.copyfile(path, target)
+            return target
+        except OSError:
+            continue
+    return path
+
+
 class Video:
     def __init__(self, path: str):
-        self.path = path
-        cap = cv2.VideoCapture(path)
+        self.path = opencv_path(path)
+        self.original_path = path
+        cap = cv2.VideoCapture(self.path)
         if not cap.isOpened():
             raise IOError(f"영상을 열 수 없습니다: {path}")
         self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
