@@ -1,0 +1,47 @@
+name: Windows 앱 만들기
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install libraries
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt pytest==8.3.3 pyinstaller==6.10.0
+
+      - name: Test
+        working-directory: app
+        run: python -m pytest -q tests
+
+      - name: Build HoopStat.exe
+        working-directory: app
+        run: pyinstaller --noconfirm --onefile --windowed --name HoopStat --distpath ../dist --workpath ../build main.py
+
+      - name: Smoke test (starts and stops without opening a window)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\HoopStat.exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { Write-Error "HoopStat.exe closed by itself (exit code $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HoopStat-windows
+          path: |
+            dist/HoopStat.exe
+            app/사용법.md
+          if-no-files-found: error
