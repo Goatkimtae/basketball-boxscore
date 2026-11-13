@@ -50,11 +50,15 @@ function xlsxBlob(events, s) {
   const box = Stats.boxScore(events, teams);
   const val = (k, v) => (v == null ? '' : k.endsWith('%') ? v / 100 : v);
   const aoa = [[titleOf(s)], [`영상: ${s.video_name || ''} · 자동 분석 + 사람 검토 · 출전시간과 +/-는 계산하지 않음`], [],
-    ['팀', ...Stats.COLS.map((k) => (Stats.KO[k] ? `${k} ${Stats.KO[k]}` : k))]];
+    ['팀 기록', ...teams]];
+  for (const r of Stats.teamCompare(box, teams)) aoa.push([r.label, r.a === String(r.va) ? r.va : r.a, r.b === String(r.vb) ? r.vb : r.b]);
+  aoa.push([], ['팀', ...Stats.COLS.map((k) => (Stats.KO[k] ? `${k} ${Stats.KO[k]}` : k))]);
   for (const [t, st] of box.teams) aoa.push([t, ...Stats.COLS.map((k) => val(k, st[k]))]);
+  const T = Object.fromEntries(box.teams);
   for (const [t, ps] of Object.entries(box.players)) {
-    aoa.push([], [`${t} 선수별`], ['등번호', ...Stats.COLS]);
+    aoa.push([], [`${t} 선수별 기록`], ['등번호', ...Stats.COLS]);
     for (const [p, st] of ps) aoa.push([p, ...Stats.COLS.map((k) => val(k, st[k]))]);
+    aoa.push(['팀 합계', ...Stats.COLS.map((k) => val(k, T[t][k]))]);
   }
   aoa.push([]);
   for (const m of Stats.checks(events)) aoa.push(['※ ' + m]);
@@ -65,7 +69,7 @@ function xlsxBlob(events, s) {
     if (!k.endsWith('%')) return;
     for (let r = 0; r <= range.e.r; r++) {
       const cell = ws1[XLSX.utils.encode_cell({ r, c: ci + 1 })];
-      if (cell && typeof cell.v === 'number') cell.z = '0.0%';
+      if (cell && typeof cell.v === 'number' && cell.v <= 1) cell.z = '0.0%';
     }
   });
   ws1['!cols'] = [{ wch: 12 }, ...Stats.COLS.map(() => ({ wch: 9 }))];
@@ -73,11 +77,14 @@ function xlsxBlob(events, s) {
     ...EVENT_KEYS.slice(1).map((k) => e[k] ?? ''), ['야투', '자유투'].includes(e.type) ? Stats.points(e) : ''])]);
   ws2['!cols'] = [9, 10, 8, 10, 14, 8, 8, 8, 60, 7].map((w) => ({ wch: w }));
   const rules = [['항목', '내용'],
-    ['자동 기록', '야투 시도와 성공/실패만 자동입니다. 공이 림 위에서 림 가운데 아래로 0.6초 안에 지나가면 성공으로 봅니다.'],
+    ['야투(자동)', '골대 근처에서 공이 림 높이 이상 올라간 구간을 슛으로, 공이 림 위에서 림 가운데 아래로 0.6초 안에 지나가면 성공으로 봅니다.'],
+    ['리바운드(자동)', '실패한 슛 다음 슛을 같은 팀이 같은 골대에서 던지면 공격 리바운드, 상대 팀이 던지면 수비 리바운드(FIBA 기록 정의). 카메라가 반대쪽 골대로 가면 공격권이 넘어간 것으로 봅니다.'],
+    ['턴오버(자동)', '공을 가진 팀이 슛 없이 상대에게 공격권을 넘기면(다음 슛이 상대 팀) 턴오버. 시각은 카메라 이동으로 추정합니다. 스틸 여부는 자동으로 정하지 않습니다.'],
+    ['파울·자유투(자동)', '슛 직후 0.4초 이상 이어진 휘슬 소리 → 슈팅 파울(수비 팀). 그 뒤 같은 골대 슛 1~2개를 자유투로 봅니다. 휘슬은 2~4.8kHz 대역의 고른 소리로 찾습니다.'],
+    ['사람이 넣는 기록', '등번호(등번호 넣기), 어시스트, 스틸, 블록, 3점슛, 슛이 아닌 파울'],
     ['팀', `골대 방향으로 정합니다. 왼쪽 골대 공격 = ${teams[0]}, 오른쪽 골대 공격 = ${teams[1]}${s.switch_time ? ` (영상 ${s.switch_time}초부터 서로 바뀜)` : ''}`],
     ['2점·3점', '자동 기록은 모두 2점입니다. 3점 라인은 영상으로 판정하지 않습니다.'],
     ['자유투(팀 규칙)', '2점슛 시도 중 파울은 자유투 1개(성공 시 2점), 3점슛 시도 중 파울은 2개(첫 번째 2점, 두 번째 1점). 앤드원은 1개·1점.'],
-    ['사람이 넣는 기록', '리바운드, 어시스트, 스틸, 블록, 턴오버, 파울, 자유투, 등번호'],
     ['기준 문서', '2026-2027 KBL 경기규칙(득점·파울), FIBA 기록원 매뉴얼 2016(리바운드·어시스트 등 기록 정의)']];
   const ws3 = XLSX.utils.aoa_to_sheet(rules);
   ws3['!cols'] = [{ wch: 16 }, { wch: 100 }];
@@ -100,9 +107,9 @@ function htmlText(events, s) {
   const chip = (t) => `<span class="chip" style="background:${color[t] || '#8a8f99'}"></span>`;
   const cells = (st) => Stats.COLS.map((k) => `<td class="${k === 'PTS' ? 'pts' : st[k] === 0 ? 'z' : ''}">${Stats.fmt(k, st[k])}</td>`).join('');
   const head = (first, ko) => `<tr><th class="l">${first}</th>${Stats.COLS.map((k) => `<th>${k}${ko && Stats.KO[k] ? `<small>${Stats.KO[k]}</small>` : ''}</th>`).join('')}</tr>`;
-  const teamRows = box.teams.map(([t, st]) => `<tr><td class="l">${chip(t)}${esc(t)}</td>${cells(st)}</tr>`).join('');
-  const players = Object.entries(box.players).map(([t, ps]) => `<h3>${chip(t)}${esc(t)}</h3><div class="scroll"><table><thead>${head('등번호', false)}</thead><tbody>${
-    ps.map(([p, st]) => `<tr><td class="l">${esc(p)}</td>${cells(st)}</tr>`).join('')}</tbody></table></div>`).join('');
+  const players = Object.entries(box.players).map(([t, ps]) => `<h3>${chip(t)}${esc(t)} · ${T[t].PTS}점</h3><div class="scroll"><table><thead>${head('등번호', true)}</thead><tbody>${
+    ps.map(([p, st]) => `<tr><td class="l">${esc(/^\d+$/.test(p) ? `#${p}` : p)}</td>${cells(st)}</tr>`).join('')}<tr class="total"><td class="l">팀 합계</td>${cells(T[t])}</tr></tbody></table></div>`).join('');
+  const compare = Stats.teamCompare(box, teams).map((r) => `<tr><td class="l">${r.label}</td><td class="${r.key === 'PTS' && r.va > r.vb ? 'pts' : ''}">${r.a}</td><td class="${r.key === 'PTS' && r.vb > r.va ? 'pts' : ''}">${r.b}</td></tr>`).join('');
   const pbp = sorted(events).map((e) => `<tr><td>${Number(e.time).toFixed(1)}</td>${['team', 'player', 'type', 'detail', 'result', 'source']
     .map((k) => `<td class="l">${esc(e[k])}</td>`).join('')}<td class="why">${esc(e.note)}</td></tr>`).join('');
   const notes = Stats.checks(events).map((m) => `<li>${esc(m)}</li>`).join('');
@@ -126,7 +133,7 @@ h2{margin:0 0 6px;font-size:1.15rem}h3{margin:14px 0 6px;font-size:1rem}.note{ma
 th,td{padding:8px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}thead th{background:var(--panel);color:var(--muted);font-size:12px;font-weight:600;vertical-align:bottom}
 thead th small{display:block;font-weight:400;font-size:11px}tbody tr:last-child td{border-bottom:0}.l{text-align:left}td.pts{font-weight:700}td.z{color:var(--muted)}
 th:first-child,td:first-child{position:sticky;left:0;background:var(--bg)}thead th:first-child{background:var(--panel)}
-td.why{white-space:normal;min-width:16rem;text-align:left;color:var(--muted);font-size:13px}ul{margin:0;padding-left:1.2em;color:var(--muted);font-size:13px}footer{color:var(--muted);font-size:12px}
+tr.total td{font-weight:700;border-top:2px solid var(--line)}.scroll.cmp{max-width:560px}td.why{white-space:normal;min-width:16rem;text-align:left;color:var(--muted);font-size:13px}ul{margin:0;padding-left:1.2em;color:var(--muted);font-size:13px}footer{color:var(--muted);font-size:12px}
 </style></head><body><main>
 <header><p class="eyebrow">영상 자동 분석 + 사람 검토${dur}</p><h1>${esc(titleOf(s))}</h1></header>
 <section class="score" aria-label="점수판">
@@ -134,9 +141,9 @@ td.why{white-space:normal;min-width:16rem;text-align:left;color:var(--muted);fon
 <div class="vs">왼쪽 골대: ${esc(a)} 공격<br>오른쪽 골대: ${esc(b)} 공격${s.switch_time ? `<br>${esc(s.switch_time)}초부터 방향 교대` : ''}</div>
 <div class="team r"><span class="tname">${esc(b)}${chip(b)}</span><span class="big">${sb.PTS}</span><span class="sub">야투 ${sb.FGM}/${sb.FGA} · 리바운드 ${sb.REB} · 어시스트 ${sb.AST}</span></div>
 </section>
-<section><h2>팀 합계</h2><p class="note">출전시간(MIN)과 +/-는 교체 기록이 없어 계산하지 않았습니다.</p>
-<div class="scroll"><table><thead>${head('팀', true)}</thead><tbody>${teamRows}</tbody></table></div>${notes ? `<ul>${notes}</ul>` : ''}</section>
-<section><h2>선수별 기록</h2><p class="note">등번호를 모르는 기록은 '미상'으로 묶었습니다.</p>${players}</section>
+<section><h2>팀 기록</h2>
+<div class="scroll cmp"><table><thead><tr><th class="l">항목</th><th>${chip(a)}${esc(a)}</th><th>${chip(b)}${esc(b)}</th></tr></thead><tbody>${compare}</tbody></table></div></section>
+<section><h2>선수별 기록</h2><p class="note">등번호를 모르는 기록은 '미상'으로 묶었습니다. 맨 아래 줄은 팀 합계입니다. 출전시간(MIN)과 +/-는 교체 기록이 없어 계산하지 않았습니다.</p>${players}${notes ? `<ul>${notes}</ul>` : ''}</section>
 <section><h2>사건 기록</h2><p class="note">시각은 영상 시작부터 센 초입니다. 출처 '자동'은 앱이 찾은 기록, '수동'은 사람이 넣거나 고친 기록입니다.</p>
 <div class="scroll"><table><thead><tr><th>시각(초)</th><th class="l">팀</th><th class="l">등번호</th><th class="l">기록</th><th class="l">세부</th><th class="l">결과</th><th class="l">출처</th><th class="l">비고</th></tr></thead><tbody>${pbp}</tbody></table></div></section>
 <footer>HoopStat으로 만든 기록 · 이 파일 하나로 열립니다.</footer>

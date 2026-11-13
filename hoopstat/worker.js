@@ -1,4 +1,5 @@
-/* Analysis worker: reads the video file, decodes every frame with WebCodecs and runs the engine. */
+/* Analysis worker: reads the video file, decodes every frame with WebCodecs and runs the engine,
+   then decodes the sound track and looks for referee whistles. */
 'use strict';
 importScripts('vendor/opencv.js', 'vendor/mp4box.all.min.js', 'engine.js');
 
@@ -33,19 +34,29 @@ const CODEC_NAMES = { avc1: 'H.264', avc3: 'H.264', hvc1: 'HEVC(H.265)', hev1: '
 
 async function demux(file, post) {
   const mp4 = MP4Box.createFile();
-  const chunks = [];
-  let track = null;
+  const chunks = [], audioChunks = [];
+  let track = null, audio = null;
   const ready = new Promise((resolve, reject) => {
     mp4.onReady = (info) => {
       track = info.videoTracks[0];
       if (!track) { reject(new UserError('영상 트랙이 없는 파일입니다.')); return; }
       mp4.setExtractionOptions(track.id, null, { nbSamples: 200 });
+      audio = info.audioTracks[0] || null;
+      if (audio) mp4.setExtractionOptions(audio.id, null, { nbSamples: 500 });
       mp4.start();
       resolve(info);
     };
     mp4.onError = (e) => reject(new UserError(`MP4 파일을 읽지 못했습니다: ${e}`));
   });
   mp4.onSamples = (id, _user, samples) => {
+    if (audio && id === audio.id) {
+      for (const s of samples) {
+        audioChunks.push(new EncodedAudioChunk({ type: 'key', timestamp: Math.round((1e6 * s.cts) / s.timescale),
+          duration: Math.round((1e6 * s.duration) / s.timescale), data: s.data }));
+      }
+      mp4.releaseUsedSamples(id, samples[samples.length - 1].number + 1);
+      return;
+    }
     for (const s of samples) {
       chunks.push(new EncodedVideoChunk({
         type: s.is_sync ? 'key' : 'delta',
@@ -65,12 +76,58 @@ async function demux(file, post) {
   }
   mp4.flush();
   await Promise.race([ready, new Promise((_, rej) => setTimeout(() => rej(new UserError('MP4 형식이 아니거나 손상된 파일입니다. (mp4, mov, m4v만 지원)')), 2000))]);
-  return { mp4, track, chunks };
+  return { mp4, track, chunks, audio, audioChunks };
+}
+
+/* Whistles from the sound track. Returns {status: 'ok' | 'none' | 'unsupported', list: [{t, dur, f}]} */
+async function findWhistles(mp4, audio, chunks) {
+  if (!audio || !chunks.length) return { status: 'none', list: [] };
+  if (typeof AudioDecoder === 'undefined') return { status: 'unsupported', list: [] };
+  const entry = mp4.getTrackById(audio.id).mdia.minf.stbl.stsd.entries[0];
+  let codec = audio.codec, description;
+  if (/^mp4a/i.test(codec)) {
+    const dcd = entry.esds && entry.esds.esd && entry.esds.esd.findDescriptor(4);
+    const dsi = dcd && dcd.findDescriptor(5);
+    if (dsi && dsi.data) description = new Uint8Array(dsi.data);
+  } else if (/^opus$/i.test(codec)) codec = 'opus';
+  const config = { codec, sampleRate: audio.audio.sample_rate, numberOfChannels: audio.audio.channel_count };
+  if (description) config.description = description;
+  let ok = false;
+  try { ok = (await AudioDecoder.isConfigSupported(config)).supported; } catch (e) { ok = false; }
+  if (!ok) return { status: 'unsupported', list: [] };
+  let det = null, offset = null, err = null;
+  const dec = new AudioDecoder({
+    output: (ad) => {
+      if (!det) { det = new WhistleDetector(ad.sampleRate); offset = ad.timestamp / 1e6; }
+      const n = ad.numberOfFrames, ch = ad.numberOfChannels, mono = new Float32Array(n), tmp = new Float32Array(n);
+      for (let c = 0; c < ch; c++) {
+        ad.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
+        for (let i = 0; i < n; i++) mono[i] += tmp[i] / ch;
+      }
+      ad.close();
+      det.push(mono);
+    },
+    error: (e) => { err = e; },
+  });
+  try {
+    dec.configure(config);
+    for (let i = 0; i < chunks.length; i++) {
+      if (err) break;
+      dec.decode(chunks[i]);
+      if (dec.decodeQueueSize > 64) await new Promise((r) => setTimeout(r, 0));
+    }
+    await dec.flush();
+  } catch (e) {
+    err = err || e;
+  }
+  try { dec.close(); } catch (e) { /* already closed */ }
+  if (err || !det) return { status: 'unsupported', list: [] };
+  return { status: 'ok', list: det.finish(offset || 0) };
 }
 
 async function analyze(file, templates, post, debug) {
   await cvReady;
-  const { mp4, track, chunks } = await demux(file, post);
+  const { mp4, track, chunks, audio, audioChunks } = await demux(file, post);
   if (!chunks.length) throw new UserError('영상에서 장면을 하나도 꺼내지 못했습니다.');
   const trak = mp4.getTrackById(track.id);
   const fourcc = (track.codec || '').slice(0, 4);
@@ -142,6 +199,10 @@ async function analyze(file, templates, post, debug) {
   }
   decoder.close();
   const res = analyzer.finish();
+  post({ type: 'progress', label: '소리(휘슬) 확인 중', frac: 1 });
+  const wh = await findWhistles(mp4, audio, audioChunks);
+  res.whistles = wh.list;
+  res.audio = wh.status;
   res.duration = duration;
   res.seconds = (performance.now() - t0) / 1000;
   return res;

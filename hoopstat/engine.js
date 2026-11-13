@@ -1,7 +1,8 @@
 /* HoopStat analysis engine (runs inside a Web Worker; needs the global `cv` from OpenCV.js).
    Same method as the Windows prototype:
    hoop tracking (template match) -> ball = orange + moving near the hoop, camera motion removed
-   by aligning on the hoop -> shot candidates -> made if the ball drops through the rim centre. */
+   by aligning on the hoop -> shot candidates -> made if the ball drops through the rim centre.
+   Also returns which hoop the camera shows over time, and whistles found in the audio. */
 'use strict';
 
 const HS = {
@@ -262,6 +263,108 @@ function judgeMade(shots, dets, windowSec = 2.5) {
   return shots;
 }
 
+/* ---------------------------------------------------------------- camera direction
+   Which hoop the camera shows, sampled on every 2nd frame: [t, side (0 none, 1 left, 2 right), x].
+   The play-flow step (flow.js) reads possession changes from it. */
+function cameraTrack(samples) {
+  return samples.map((s) => {
+    const h = hoopFromSample(s);
+    return [Math.round(s.t * 1000) / 1000, h ? (h[0] === HS.SIDES[0] ? 1 : 2) : 0, h ? Math.round(h[1]) : 0];
+  });
+}
+
+/* ---------------------------------------------------------------- whistle (audio)
+   A referee's whistle is a loud, steady tone between 2 and 4.8 kHz that holds for 0.4 s or more.
+   Voices put their energy below 1.5 kHz; shoe squeaks are as high but shorter (about 0.1-0.3 s).
+   Audio is averaged down to 16 kHz, then 32 ms windows every 10 ms. */
+const WH = { SR: 16000, N: 512, HOP: 160, BAND: [2000, 4800], LOW: 150, SHARE: 0.5, PEAK_DB: 12, GAP: 3, MIN_DUR: 0.4, MERGE: 1.0 };
+
+class WhistleDetector {
+  constructor(sampleRate) {
+    this.step = sampleRate / WH.SR;
+    this.phase = 0; this.acc = 0; this.cnt = 0;
+    this.ring = new Float32Array(WH.N); this.filled = 0; this.sinceHop = 0;
+    this.re = new Float64Array(WH.N); this.im = new Float64Array(WH.N);
+    this.win = Float64Array.from({ length: WH.N }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (WH.N - 1)));
+    const bits = Math.log2(WH.N);
+    this.rev = Uint32Array.from({ length: WH.N }, (_, i) => { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); return r; });
+    this.k0 = Math.ceil((WH.BAND[0] * WH.N) / WH.SR); this.k1 = Math.floor((WH.BAND[1] * WH.N) / WH.SR);
+    this.kLow = Math.ceil((WH.LOW * WH.N) / WH.SR);
+    this.band = new Float64Array(this.k1 - this.k0 + 1);
+    this.on = []; this.freq = [];
+  }
+
+  /** mono samples at the source rate */
+  push(samples) {
+    for (let i = 0; i < samples.length; i++) {
+      this.acc += samples[i]; this.cnt += 1; this.phase += 1;
+      if (this.phase >= this.step) {
+        this.phase -= this.step;
+        this._sample(this.acc / this.cnt);
+        this.acc = 0; this.cnt = 0;
+      }
+    }
+  }
+
+  _sample(v) {
+    this.ring[this.filled % WH.N] = v; this.filled += 1; this.sinceHop += 1;
+    if (this.filled >= WH.N && this.sinceHop >= WH.HOP) { this.sinceHop = 0; this._frame(); }
+  }
+
+  _frame() {
+    const N = WH.N, re = this.re, im = this.im, start = this.filled % N;
+    for (let i = 0; i < N; i++) { const j = this.rev[i]; re[j] = this.ring[(start + i) % N] * this.win[i]; im[j] = 0; }
+    for (let size = 2; size <= N; size *= 2) {
+      const half = size / 2, ang = (-2 * Math.PI) / size;
+      for (let i = 0; i < N; i += size) {
+        for (let k = 0; k < half; k++) {
+          const wr = Math.cos(ang * k), wi = Math.sin(ang * k);
+          const a = i + k, b = a + half;
+          const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+          re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        }
+      }
+    }
+    let total = 0, bandSum = 0, peak = 0, peakK = this.k0;
+    for (let k = this.kLow; k <= N / 2; k++) {
+      const p = re[k] * re[k] + im[k] * im[k];
+      total += p;
+      if (k >= this.k0 && k <= this.k1) { this.band[k - this.k0] = p; bandSum += p; if (p > peak) { peak = p; peakK = k; } }
+    }
+    let on = 0;
+    if (total > 1e-9 && bandSum / total > WH.SHARE) {
+      const sorted = Float64Array.from(this.band).sort();
+      const med = sorted[sorted.length >> 1] + 1e-15;
+      on = 10 * Math.log10(peak / med) > WH.PEAK_DB ? 1 : 0;
+    }
+    this.on.push(on); this.freq.push(on ? Math.round((peakK * WH.SR) / N) : 0);
+  }
+
+  /** offset: time (s) of the first audio sample. Returns [{t, dur, f}] */
+  finish(offset = 0) {
+    const hopS = WH.HOP / WH.SR, winS = WH.N / WH.SR, out = [];
+    const t0 = (i) => offset + i * hopS;     // window i covers [t0, t0 + winS)
+    for (let i = 0; i < this.on.length; i++) {
+      if (!this.on[i]) continue;
+      let j = i, k = i, gap = 0;
+      while (k + 1 < this.on.length) {
+        k += 1;
+        if (this.on[k]) { j = k; gap = 0; } else if (++gap > WH.GAP) break;
+      }
+      const dur = (j - i) * hopS + winS;
+      const fs = this.freq.slice(i, j + 1).filter(Boolean);
+      const f = Math.round(fs.reduce((a, b) => a + b, 0) / Math.max(1, fs.length));
+      const prev = out[out.length - 1];
+      if (dur >= WH.MIN_DUR) {
+        if (prev && t0(i) - (prev.t + prev.dur) <= WH.MERGE) prev.dur = Math.round((t0(i) + dur - prev.t) * 100) / 100;
+        else out.push({ t: Math.round(t0(i) * 100) / 100, dur: Math.round(dur * 100) / 100, f });
+      }
+      i = j;
+    }
+    return out;
+  }
+}
+
 /* ---------------------------------------------------------------- streaming pipeline
    Frames arrive one by one. Hoops are matched on every 2nd frame; a frame's hoop is the nearest
    matched frame in time, so odd frames wait for the next even one. Ball detection compares a frame
@@ -304,6 +407,7 @@ class Analyzer {
     });
     const main = results[0];
     return { shots: main.shots, ballFrames: main.ballFrames, visibility: visibility(this.samples), frames: this.last + 1,
+      track: cameraTrack(this.samples),
       variants: results.length > 1 || this.debug ? results : undefined, samples: this.debug ? this.samples : undefined };
   }
 
@@ -338,5 +442,5 @@ class Analyzer {
   }
 }
 
-if (typeof self !== 'undefined') Object.assign(self, { HS, HoopTracker, BallDetector, Analyzer, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
-if (typeof module !== 'undefined') module.exports = { HS, HoopTracker, BallDetector, Analyzer, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };
+if (typeof self !== 'undefined') Object.assign(self, { HS, WH, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
+if (typeof module !== 'undefined') module.exports = { HS, WH, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };

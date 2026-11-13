@@ -2,7 +2,7 @@
    event: {time, team, player, type, detail, result, source, confidence, note} */
 'use strict';
 
-const TYPES = ['야투', '자유투', '리바운드', '어시스트', '스틸', '블록', '턴오버', '파울'];
+const TYPES = ['야투', '자유투', '리바운드', '어시스트', '스틸', '블록', '턴오버', '파울', '휘슬'];   // 휘슬: review marker, not counted
 const DETAILS = {
   야투: ['2점', '3점'],
   자유투: ['2점슛 파울 1구', '3점슛 파울 1구', '3점슛 파울 2구', '앤드원', '기타'],
@@ -66,16 +66,39 @@ function boxScore(events, teams) {
   return out;
 }
 
+/** Team comparison rows for the two teams: {label, key, a, b, va, vb} (a/b are display text) */
+const COMPARE = [['득점', 'PTS'], ['야투', ['FGM', 'FGA', 'FG%']], ['2점슛', ['2PM', '2PA', '2P%']], ['3점슛', ['3PM', '3PA', '3P%']],
+  ['자유투', ['FTM', 'FTA', 'FT%']], ['리바운드', 'REB'], ['공격 리바운드', 'OREB'], ['수비 리바운드', 'DREB'], ['어시스트', 'AST'],
+  ['스틸', 'STL'], ['블록', 'BLK'], ['턴오버', 'TO'], ['파울', 'PF']];
+function teamCompare(box, teams) {
+  const T = Object.fromEntries(box.teams);
+  const a = T[teams[0]] || tally([]), b = T[teams[1]] || tally([]);
+  const text = (s, k) => (Array.isArray(k) ? `${s[k[0]]}/${s[k[1]]}${s[k[2]] == null ? '' : ` (${s[k[2]].toFixed(1)}%)`}` : String(s[k]));
+  return COMPARE.map(([label, k]) => {
+    const key = Array.isArray(k) ? k[0] : k;
+    return { label, key, a: text(a, k), b: text(b, k), va: a[key], vb: b[key] };
+  });
+}
+
 const fmt = (col, v) => (v == null ? '–' : col.endsWith('%') ? v.toFixed(1) : String(v));
 
 function checks(events) {
   const msgs = [];
   const missed = events.filter((e) => e.type === '야투' && e.result === '실패').length;
+  const lastFtMissed = events.filter((e) => e.type === '자유투' && e.result === '실패' && e.detail !== '3점슛 파울 1구').length;
   const reb = events.filter((e) => e.type === '리바운드').length;
-  if (missed && reb === 0) msgs.push(`실패한 야투 ${missed}개에 리바운드 기록이 없습니다. 리바운드는 자동으로 찾지 않으니 '사건 추가'로 넣어 주세요.`);
-  else if (missed !== reb) msgs.push(`실패한 야투 ${missed}개, 리바운드 ${reb}개입니다. 보통은 같아야 합니다(쿼터 종료 직전 등은 예외).`);
+  if (missed + lastFtMissed !== reb) {
+    msgs.push(`실패한 슛(야투 ${missed}개 + 마지막 자유투 ${lastFtMissed}개)과 리바운드 ${reb}개의 수가 다릅니다. 보통은 같습니다(쿼터 종료 직전 등은 예외).`);
+  }
   const auto = events.filter((e) => e.source === '자동' && e.type === '야투').length;
   if (auto) msgs.push(`자동으로 찾은 야투 ${auto}개는 모두 2점으로 기록했습니다. 3점슛은 '수정'에서 바꿔 주세요.`);
+  const made = events.filter((e) => e.type === '야투' && e.result === '성공').length;
+  const ast = events.filter((e) => e.type === '어시스트').length;
+  if (made && !ast) msgs.push(`성공한 야투 ${made}개 중 어시스트가 있었는지는 자동으로 판정하지 않습니다. 장면을 보고 '사건 추가'로 넣어 주세요.`);
+  const wh = events.filter((e) => e.type === '휘슬').length;
+  if (wh) msgs.push(`확인할 휘슬 ${wh}개가 있습니다. 파울이면 '수정'에서 기록을 파울로 바꿔 주세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
+  const noNum = events.filter((e) => e.team && !['휘슬'].includes(e.type) && !(e.player || '').trim()).length;
+  if (noNum) msgs.push(`등번호가 없는 기록 ${noNum}개는 선수별 기록에서 '미상'으로 묶입니다. '등번호 넣기'로 채우면 개인 기록이 나옵니다.`);
   return msgs;
 }
 
@@ -96,10 +119,19 @@ function shotsToEvents(shots, s) {
   }));
 }
 
+/** Replace the automatic records with a new analysis, keep manual ones, and carry over jersey
+    numbers typed on automatic records (same team and kind, within 1 s). */
 function mergeReanalysis(old, auto) {
-  return [...old.filter((e) => e.source !== '자동'), ...auto].sort((a, b) => a.time - b.time);
+  const typed = old.filter((e) => e.source === '자동' && (e.player || '').trim());
+  const fresh = auto.map((e) => {
+    if ((e.player || '').trim()) return e;
+    const m = typed.find((o) => o.team === e.team && o.type === e.type && Math.abs(o.time - e.time) <= 1);
+    if (m) typed.splice(typed.indexOf(m), 1);
+    return m ? { ...e, player: m.player } : e;
+  });
+  return [...old.filter((e) => e.source !== '자동'), ...fresh].sort((a, b) => a.time - b.time);
 }
 
-const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, fmt, checks, teamFor, shotsToEvents, mergeReanalysis };
+const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis };
 if (typeof window !== 'undefined') window.Stats = Stats;
 if (typeof module !== 'undefined') module.exports = Stats;

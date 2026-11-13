@@ -7,7 +7,7 @@ const PROC_W = 768, TW = 84, TH = 70, RIM_DY = 0.30;
 const LS_PROFILES = 'hoopstat.profiles.v1';
 const LS_WORK = 'hoopstat.work.v1';
 
-const S = { file: null, url: null, duration: 0, events: [], selected: -1, worker: null, videoOk: false };
+const S = { file: null, url: null, duration: 0, events: [], selected: -1, worker: null, videoOk: false, numbering: false, skipped: new Set(), sceneToken: 0, grabChain: Promise.resolve() };
 
 /* ------------------------------------------------------------------ storage */
 function lsGet(key, fallback) {
@@ -29,7 +29,7 @@ function profileTemplates(name) {
 }
 
 /* ------------------------------------------------------------------ settings */
-const SETTING_IDS = ['team_left', 'color_left', 'team_right', 'color_right', 'switch_time', 'title'];
+const SETTING_IDS = ['team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'switch_time', 'title'];
 function settings() {
   const s = {};
   for (const id of SETTING_IDS) s[id] = $(id).value.trim();
@@ -59,6 +59,11 @@ function seek(video, t) {
     video.currentTime = Math.max(0, Math.min(t, (video.duration || t) - 0.01));
     setTimeout(done, 4000);
   });
+}
+/** grabs run one at a time on the shared hidden video; a stale token skips the work */
+function queueGrab(t, canvas, token) {
+  S.grabChain = S.grabChain.then(() => (token === S.sceneToken ? grab(t, canvas) : null)).catch(() => null);
+  return S.grabChain;
 }
 async function grab(t, canvas) {
   const v = $('vid');
@@ -221,11 +226,14 @@ $('runBtn').addEventListener('click', () => {
       S.duration = m.duration;
     } else if (m.type === 'done') {
       const r = m.result;
-      const auto = Stats.shotsToEvents(r.shots, s);
-      S.events = Stats.mergeReanalysis(S.events, auto);
-      const made = auto.filter((e) => e.result === '성공').length, v = r.visibility;
-      status(`분석 끝(${fmtSec(r.seconds)}): 야투 ${auto.length}개(성공 ${made}) 찾음. 골대가 화면에 보인 비율 왼쪽 ${(v['왼쪽'] * 100).toFixed(0)}%, `
-        + `오른쪽 ${(v['오른쪽'] * 100).toFixed(0)}%, 안 보임 ${(v['없음'] * 100).toFixed(0)}%.`);
+      const out = Flow.infer(r, s);
+      S.events = Stats.mergeReanalysis(S.events, out.events);
+      const n = out.summary, v = r.visibility;
+      const sound = r.audio === 'ok' ? `휘슬 ${n.whistles}번`
+        : r.audio === 'none' ? '영상에 소리가 없어 파울·자유투는 판정하지 않음' : '이 브라우저가 소리 형식을 읽지 못해 파울·자유투는 판정하지 않음';
+      status(`분석 끝(${fmtSec(r.seconds)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
+        + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. 골대가 화면에 보인 비율 왼쪽 ${(v['왼쪽'] * 100).toFixed(0)}%, `
+        + `오른쪽 ${(v['오른쪽'] * 100).toFixed(0)}%, 안 보임 ${(v['없음'] * 100).toFixed(0)}%. 다음은 '등번호 넣기'.`);
       if (v['왼쪽'] + v['오른쪽'] < 0.3) alert("골대를 거의 찾지 못했습니다. 다른 체육관 영상이라면 '새로 만들기'로 체육관 설정을 새로 만들어 주세요.");
       finish(); render(); save();
     } else if (m.type === 'error') {
@@ -259,34 +267,58 @@ function render() {
     return tr;
   }));
   $('emptyEvents').hidden = S.events.length > 0;
-  // box score
-  const box = Stats.boxScore(S.events, teams());
+  renderBox();
+  $('checks').replaceChildren(...Stats.checks(S.events).map((m) => Object.assign(document.createElement('li'), { textContent: m })));
+}
+function teamColor(t) {
+  const s = settings(), [a, b] = teams();
+  return t === a ? Export.TEAM_COLORS[s.color_left] : t === b ? Export.TEAM_COLORS[s.color_right] : '#8a8f99';
+}
+function chipFor(t) { const c = document.createElement('span'); c.className = 'chip'; c.style.background = teamColor(t) || '#8a8f99'; return c; }
+function statHead(first) {
   const head = document.createElement('tr');
-  head.append(Object.assign(document.createElement('th'), { textContent: '팀 / 등번호' }));
+  head.append(Object.assign(document.createElement('th'), { textContent: first }));
   for (const k of Stats.COLS) {
     const th = document.createElement('th'); th.textContent = k;
     if (Stats.KO[k]) { const sm = document.createElement('small'); sm.textContent = Stats.KO[k]; th.append(sm); }
     head.append(th);
   }
-  $('boxTable').tHead.replaceChildren(head);
-  const s = settings();
-  const color = { [teams()[0]]: Export.TEAM_COLORS[s.color_left], [teams()[1]]: Export.TEAM_COLORS[s.color_right] };
-  const rows = [];
-  for (const [t, st] of box.teams) {
-    const tr = document.createElement('tr'); tr.className = 'team';
-    const first = cell(''); const chip = document.createElement('span'); chip.className = 'chip'; chip.style.background = color[t] || '#8a8f99';
-    first.append(chip, document.createTextNode(t)); tr.append(first);
-    for (const k of Stats.COLS) tr.append(cell(Stats.fmt(k, st[k]), k === 'PTS' ? 'pts' : st[k] === 0 ? 'zero' : ''));
-    rows.push(tr);
-    for (const [p, ps] of box.players[t] || []) {
-      const pr = document.createElement('tr'); pr.className = 'player';
-      pr.append(cell(p));
-      for (const k of Stats.COLS) pr.append(cell(Stats.fmt(k, ps[k]), k === 'PTS' ? 'pts' : ps[k] === 0 ? 'zero' : ''));
-      rows.push(pr);
-    }
-  }
-  $('boxTable').tBodies[0].replaceChildren(...rows);
-  $('checks').replaceChildren(...Stats.checks(S.events).map((m) => Object.assign(document.createElement('li'), { textContent: m })));
+  return head;
+}
+function statRow(label, st, cls) {
+  const tr = document.createElement('tr'); if (cls) tr.className = cls;
+  tr.append(cell(label));
+  for (const k of Stats.COLS) tr.append(cell(Stats.fmt(k, st[k]), k === 'PTS' ? 'pts' : st[k] === 0 ? 'zero' : ''));
+  return tr;
+}
+function renderBox() {
+  const tm = teams(), box = Stats.boxScore(S.events, tm);
+  // team comparison
+  const h = document.createElement('tr');
+  h.append(Object.assign(document.createElement('th'), { textContent: '항목' }));
+  for (const t of tm) { const th = document.createElement('th'); th.append(chipFor(t), document.createTextNode(t)); h.append(th); }
+  $('teamTable').tHead.replaceChildren(h);
+  $('teamTable').tBodies[0].replaceChildren(...Stats.teamCompare(box, tm).map((r) => {
+    const tr = document.createElement('tr');
+    const lead = r.key === 'PTS' && r.va !== r.vb ? (r.va > r.vb ? 0 : 1) : -1;
+    tr.append(cell(r.label), cell(r.a, lead === 0 ? 'lead' : ''), cell(r.b, lead === 1 ? 'lead' : ''));
+    return tr;
+  }));
+  // one table per team: players, then the team total
+  const T = Object.fromEntries(box.teams);
+  const blocks = box.teams.map(([t]) => {
+    const div = document.createElement('div'); div.className = 'team-block';
+    const h4 = document.createElement('h4'); h4.append(chipFor(t), document.createTextNode(`${t} · ${T[t].PTS}점`));
+    const table = document.createElement('table'); table.className = 'grid stats';
+    table.createTHead().append(statHead('등번호'));
+    const body = table.createTBody();
+    for (const [p, ps] of box.players[t] || []) body.append(statRow(/^\d+$/.test(p) ? `#${p}` : p, ps, 'player-row'));
+    body.append(statRow('팀 합계', T[t], 'total'));
+    const sc = document.createElement('div'); sc.className = 'scroll'; sc.append(table);
+    div.append(h4, sc);
+    return div;
+  });
+  $('playerTables').replaceChildren(...blocks);
 }
 $('eventTable').tBodies[0].addEventListener('click', (ev) => {
   const tr = ev.target.closest('tr'); if (!tr) return;
@@ -359,32 +391,102 @@ $('delBtn').addEventListener('click', () => {
   S.events.splice(S.selected, 1); S.selected = -1; render(); save();
 });
 
-/* ------------------------------------------------------------------ scene viewer */
-$('sceneBtn').addEventListener('click', async () => {
-  if (!needSel()) return;
-  if (!S.file || !S.videoOk) { alert('영상을 찾을 수 없습니다. 1단계에서 경기 영상을 다시 골라 주세요.'); return; }
-  const e = S.events[S.selected];
-  $('sceneTitle').textContent = `장면 보기 · ${Number(e.time).toFixed(1)}초 ${e.team} ${e.type} ${e.result || ''}`;
+/* ------------------------------------------------------------------ scene viewer + jersey numbers */
+const NO_PLAYER = new Set(['휘슬']);
+const needsNumber = (e) => e.team && !NO_PLAYER.has(e.type) && !(e.player || '').trim();
+function rosterOf(team) {
+  const s = settings(), [a, b] = teams();
+  const raw = team === a ? s.roster_left : team === b ? s.roster_right : '';
+  const list = (raw || '').split(/[\s,·/]+/).map((x) => x.replace(/^#/, '').trim()).filter(Boolean);
+  // numbers already used for this team, so the buttons also work without a roster
+  for (const e of S.events) if (e.team === team && /^\d+$/.test((e.player || '').trim()) && !list.includes(e.player.trim())) list.push(e.player.trim());
+  return list.sort((x, y) => (/^\d+$/.test(x) && /^\d+$/.test(y) ? Number(x) - Number(y) : x.localeCompare(y, 'ko')));
+}
+function nextToNumber(from) {
+  for (let k = 0; k < S.events.length; k++) {
+    const i = (from + k) % S.events.length;
+    if (needsNumber(S.events[i]) && !S.skipped.has(S.events[i])) return i;
+  }
+  return -1;
+}
+async function showScene(i) {
+  const e = S.events[i];
+  S.selected = i; render();
+  const token = ++S.sceneToken;
+  const what = `${Number(e.time).toFixed(1)}초 ${e.team} ${e.type}${e.detail ? ` ${e.detail}` : ''}${e.result ? ` ${e.result}` : ''}`;
+  $('sceneTitle').textContent = S.numbering ? `등번호 넣기 · ${what}` : `장면 보기 · ${what}`;
+  $('numBar').hidden = !S.numbering;
+  if (S.numbering) {
+    const left = S.events.filter((x) => needsNumber(x) && !S.skipped.has(x)).length;
+    $('numAsk').textContent = `${e.team} ${e.type === '야투' || e.type === '자유투' ? '슛한' : e.type === '리바운드' ? '공을 잡은' : e.type === '턴오버' ? '공을 잃은' : e.type === '파울' ? '파울한' : ''} 선수 등번호`;
+    $('numLeft').textContent = `· 남은 기록 ${left}개`;
+    const btns = rosterOf(e.team).map((p) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = /^\d+$/.test(p) ? `#${p}` : p;
+      b.addEventListener('click', () => setNumber(p));
+      return b;
+    });
+    if (!btns.length) btns.push(Object.assign(document.createElement('span'), { className: 'muted', textContent: "1단계에 팀 등번호 명단을 적으면 번호 버튼이 생깁니다. 지금은 아래 칸에 번호를 적으세요." }));
+    $('numButtons').replaceChildren(...btns);
+    $('numInput').value = '';
+  }
   const sv = $('sceneVideo');
-  sv.src = S.url;
-  $('sceneGrid').replaceChildren();
-  $('sceneDlg').showModal();
-  sv.onloadedmetadata = () => { sv.currentTime = Math.max(0, e.time - 2); };
+  if (sv.src !== S.url) sv.src = S.url;
+  const start = Math.max(0, e.time - 2);
+  if (sv.readyState >= 1) sv.currentTime = start; else sv.onloadedmetadata = () => { sv.currentTime = start; };
+  if (!$('sceneDlg').open) $('sceneDlg').showModal();
+  if (S.numbering) setTimeout(() => $('numInput').focus(), 0);
+  const figs = [];
   for (const dt of [-1, -0.5, 0, 0.5, 1, 1.5]) {
     const t = Math.max(0, e.time + dt);
     const fig = document.createElement('figure');
     const c = document.createElement('canvas');
     fig.append(c, Object.assign(document.createElement('figcaption'), { textContent: `${t.toFixed(1)}초` }));
-    $('sceneGrid').append(fig);
-    await grab(t, c);
+    figs.push([t, c, fig]);
   }
+  $('sceneGrid').replaceChildren(...figs.map((f) => f[2]));
+  for (const [t, c] of figs) queueGrab(t, c, token);
+}
+function setNumber(p) {
+  const i = S.selected;
+  if (i < 0 || !S.events[i]) return;
+  S.events[i] = { ...S.events[i], player: String(p).trim() };
+  save();
+  const next = nextToNumber(i + 1);
+  if (next < 0) { $('sceneDlg').close(); S.numbering = false; render(); status('등번호가 빈 기록이 없습니다. 박스스코어 탭에서 선수별 기록을 확인하세요.'); return; }
+  showScene(next);
+}
+function requireVideo() {
+  if (!S.file || !S.videoOk) { alert('영상을 찾을 수 없습니다. 1단계에서 경기 영상을 다시 골라 주세요.'); return false; }
+  return true;
+}
+$('sceneBtn').addEventListener('click', () => {
+  if (!needSel() || !requireVideo()) return;
+  S.numbering = false; showScene(S.selected);
+});
+$('numBtn').addEventListener('click', () => {
+  if (!requireVideo()) return;
+  S.skipped = new Set();
+  const start = S.selected >= 0 && S.events[S.selected] && needsNumber(S.events[S.selected]) ? S.selected : nextToNumber(0);
+  if (start < 0) { alert('등번호가 빈 기록이 없습니다. 바꾸려면 줄을 두 번 눌러 수정하세요.'); return; }
+  S.numbering = true; showScene(start);
+});
+$('numEnter').addEventListener('click', () => { const v = $('numInput').value.replace(/^#/, '').trim(); if (v) setNumber(v); });
+$('numInput').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); $('numEnter').click(); }
+});
+$('numUnknown').addEventListener('click', () => setNumber('미상'));
+$('numSkip').addEventListener('click', () => {
+  const e = S.events[S.selected]; if (e) S.skipped.add(e);
+  const next = nextToNumber(S.selected + 1);
+  if (next < 0) { $('sceneDlg').close(); return; }
+  showScene(next);
 });
 $('sceneReplay').addEventListener('click', () => {
   const e = S.events[S.selected]; const sv = $('sceneVideo');
   if (!e) return;
   sv.currentTime = Math.max(0, e.time - 2); sv.play();
 });
-$('sceneDlg').addEventListener('close', () => { $('sceneVideo').pause(); });
+$('sceneDlg').addEventListener('close', () => { $('sceneVideo').pause(); S.numbering = false; S.sceneToken++; render(); });
 
 /* ------------------------------------------------------------------ saving */
 function baseName() {

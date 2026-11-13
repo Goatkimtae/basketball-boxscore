@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HoopStat 농구 기록</title>
-<meta name="description" content="농구 경기 영상에서 야투를 자동으로 찾아 박스스코어를 만드는 웹 앱. 영상은 내 PC 밖으로 나가지 않습니다.">
+<meta name="description" content="농구 경기 영상에서 야투·리바운드·턴오버·파울·자유투를 자동으로 찾아 팀·선수 박스스코어를 만드는 웹 앱. 영상은 내 PC 밖으로 나가지 않습니다.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <meta name="theme-color" content="#1f2a55">
@@ -16,7 +16,7 @@
     <img src="icon-192.png" alt="" width="36" height="36">
     <div>
       <h1>HoopStat</h1>
-      <p>농구 경기 영상 → 야투 자동 기록 → 박스스코어</p>
+      <p>농구 경기 영상 → 자동 기록 → 팀·선수 박스스코어</p>
     </div>
   </div>
   <button id="installBtn" class="ghost" hidden>앱으로 설치</button>
@@ -54,6 +54,17 @@
         <select id="color_right" aria-label="오른쪽 골대 공격 팀 색"></select>
       </div>
 
+      <label for="roster_left">왼쪽 공격 팀 등번호</label>
+      <div class="row">
+        <input id="roster_left" class="wide" placeholder="예: 1 6 11 12 19" inputmode="numeric">
+        <span class="muted">선수 명단(띄어쓰기나 쉼표로 구분). 등번호 넣기 버튼이 됩니다.</span>
+      </div>
+
+      <label for="roster_right">오른쪽 공격 팀 등번호</label>
+      <div class="row">
+        <input id="roster_right" class="wide" placeholder="예: 3 7 22 24 33" inputmode="numeric">
+      </div>
+
       <label for="switch_time">공격 방향 바뀌는 시각</label>
       <div class="row">
         <input id="switch_time" inputmode="decimal" size="8" placeholder="예: 1200">
@@ -77,13 +88,15 @@
 
   <section class="card" id="step3">
     <h2><span class="num">3</span>검토와 수정</h2>
-    <p class="muted">자동 기록은 야투 시도와 성공/실패만입니다. 리바운드·어시스트·파울·턴오버·자유투·등번호는 '사건 추가'나 '수정'으로 넣으세요.</p>
+    <p class="muted">자동 기록: 야투(성공/실패), 리바운드(공격/수비), 턴오버, 휘슬 뒤 자유투와 슈팅 파울. 어시스트·스틸·블록·3점은 자동이 아니니 '사건 추가'나 '수정'으로 넣으세요.
+      등번호는 영상 화질로는 읽을 수 없어서 <b>등번호 넣기</b>로 장면을 보며 번호 버튼을 누르면 개인 기록이 채워집니다.</p>
     <div class="tabs" role="tablist">
       <button role="tab" id="tabEvents" aria-selected="true" aria-controls="paneEvents">사건 기록</button>
       <button role="tab" id="tabBox" aria-selected="false" aria-controls="paneBox">박스스코어</button>
     </div>
     <div id="paneEvents" role="tabpanel" aria-labelledby="tabEvents">
       <div class="toolbar">
+        <button id="numBtn" class="primary">등번호 넣기</button>
         <button id="sceneBtn">장면 보기</button>
         <button id="editBtn">수정…</button>
         <button id="addBtn">사건 추가…</button>
@@ -99,7 +112,11 @@
       <p id="emptyEvents" class="muted center">아직 기록이 없습니다. 분석을 시작하거나 '사건 추가'로 직접 넣으세요.</p>
     </div>
     <div id="paneBox" role="tabpanel" aria-labelledby="tabBox" hidden>
-      <div class="scroll"><table class="grid num" id="boxTable"><thead></thead><tbody></tbody></table></div>
+      <h3 class="subhead">팀 기록</h3>
+      <div class="scroll cmp-wrap"><table class="grid stats compare" id="teamTable"><thead></thead><tbody></tbody></table></div>
+      <h3 class="subhead">선수별 기록</h3>
+      <p class="muted">등번호가 없는 기록은 '미상'으로 묶입니다. 맨 아래 줄은 팀 합계입니다. 출전시간(MIN)과 +/-는 교체 기록이 없어 계산하지 않습니다.</p>
+      <div id="playerTables"></div>
       <ul id="checks" class="checks"></ul>
     </div>
   </section>
@@ -182,6 +199,17 @@
 <dialog id="sceneDlg" aria-labelledby="sceneTitle">
   <form method="dialog" class="dlg">
     <h3 id="sceneTitle">장면 보기</h3>
+    <div id="numBar" class="numbar" hidden>
+      <div class="row"><b id="numAsk">이 기록의 선수 등번호</b><span id="numLeft" class="muted"></span></div>
+      <div id="numButtons" class="row"></div>
+      <div class="row">
+        <input id="numInput" size="5" inputmode="numeric" placeholder="번호" aria-label="등번호 직접 입력">
+        <button type="button" id="numEnter">넣기</button>
+        <button type="button" id="numUnknown" class="ghost">모름(미상)</button>
+        <button type="button" id="numSkip" class="ghost">건너뛰기</button>
+        <span class="muted">번호를 누르면 다음 기록으로 넘어갑니다.</span>
+      </div>
+    </div>
     <video id="sceneVideo" controls muted playsinline class="frame"></video>
     <div class="row">
       <button type="button" id="sceneReplay">이 장면 2초 전부터 다시 재생</button>
@@ -196,6 +224,7 @@
 
 <script src="vendor/xlsx.full.min.js" defer></script>
 <script src="stats.js"></script>
+<script src="flow.js"></script>
 <script src="export.js"></script>
 <script src="app.js"></script>
 </body>
