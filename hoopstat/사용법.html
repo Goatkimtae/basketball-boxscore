@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HoopStat 사용법</title>
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  .doc { max-width: 760px; margin: 0 auto; padding-block: 18px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); line-height: 1.7; }
+  .doc h2 { margin-top: 28px; font-size: 1.1rem; }
+  .doc table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .doc th, .doc td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .doc th { background: var(--panel-2); }
+  .doc .tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon-192.png" alt="" width="36" height="36"><div><h1>HoopStat 사용법</h1><p><a href="./">앱으로 돌아가기</a></p></div></div>
+</header>
+<main class="doc">
+  <p>HoopStat은 브라우저에서 동작하는 앱입니다. 프로그램을 설치하지 않고, Windows 보안 설정(스마트 앱 컨트롤)을 바꾸지 않아도 됩니다.
+  <b>영상은 인터넷에 올라가지 않고</b> 내 PC의 브라우저 안에서만 분석됩니다.</p>
+
+  <h2>앱으로 설치하기 (선택)</h2>
+  <ol>
+    <li>최신 <b>Microsoft Edge</b> 또는 <b>Chrome</b>으로 이 앱 주소를 엽니다.</li>
+    <li>화면 위 <b>앱으로 설치</b> 버튼을 누르거나, Edge 주소창 오른쪽의 <b>앱 사용 가능</b> 아이콘 → <b>설치</b>를 누릅니다.</li>
+    <li>바탕화면·시작 메뉴에 HoopStat 아이콘이 생기고, 별도 창으로 열립니다. 한 번 연 뒤에는 인터넷이 없어도 열립니다.</li>
+  </ol>
+
+  <h2>순서</h2>
+  <ol>
+    <li><b>경기 영상</b>: mp4/mov 파일을 고릅니다.</li>
+    <li><b>체육관 설정</b>(처음 가는 체육관만): '새로 만들기'에서 왼쪽 골대와 오른쪽 골대가 보이는 장면을 각각 찾아 <b>림(고리) 한가운데</b>를 한 번씩 누르고 저장합니다.
+      같은 체육관 영상은 다음부터 설정만 고르면 됩니다. 설정은 이 브라우저에 저장됩니다.</li>
+    <li><b>팀</b>: 왼쪽·오른쪽 골대를 공격하는 팀 이름과 색을 적습니다. 후반에 방향이 바뀌면 그 시각(영상 기준 초)을 적습니다.</li>
+    <li><b>분석 시작</b>: 개발 환경 기준 92초 영상에 약 2분 20초 걸렸습니다. PC 성능에 따라 다릅니다. 분석 중에도 다른 창은 쓸 수 있습니다.</li>
+    <li><b>검토</b>: 줄을 고르고 '장면 보기'로 확인합니다. 두 번 누르면 수정합니다(3점, 성공/실패, 등번호).
+      '사건 추가'로 리바운드·어시스트·스틸·블록·턴오버·파울·자유투를 넣습니다.</li>
+    <li><b>저장</b>: 엑셀, 웹페이지, CSV. '작업 저장'으로 저장해 두면 다른 PC에서도 이어서 고칠 수 있습니다.</li>
+  </ol>
+
+  <h2>자동 판정 방식과 한계</h2>
+  <div class="tablewrap"><table>
+    <tr><th>항목</th><th>방식</th><th>한계</th></tr>
+    <tr><td>골대 위치</td><td>체육관 설정의 골대 그림과 같은 곳을 매 장면 찾음(카메라가 움직여도 됨)</td><td>다른 체육관은 설정을 새로 만들어야 함</td></tr>
+    <tr><td>야투 시도</td><td>골대 근처에서 주황색으로 움직이는 공이 림 높이 이상 올라간 구간</td><td>공이 화면 밖일 때 던진 슛은 못 찾음. 공 색·조명이 다르면 놓칠 수 있음</td></tr>
+    <tr><td>성공/실패</td><td>공이 림 바로 위에서 0.6초 안에 림 가운데 아래로 지나가면 성공</td><td>그물이 가려지거나 흐리면 틀릴 수 있음</td></tr>
+    <tr><td>팀</td><td>공격하는 골대 방향</td><td>방향이 바뀌는 시각을 적어야 함</td></tr>
+    <tr><td>2점/3점</td><td>자동은 모두 2점</td><td>3점은 직접 바꿔야 함</td></tr>
+    <tr><td>자유투 점수</td><td>팀 규칙: 2점슛 파울 1구 2점, 3점슛 파울 1구 2점·2구 1점, 앤드원 1점</td><td></td></tr>
+  </table></div>
+  <p class="muted">판정 규칙은 92초 샘플 한 개로 맞췄습니다. 처음 몇 경기는 '장면 보기'로 꼭 확인하세요. '신뢰도'가 낮은 줄부터 보면 빠릅니다.</p>
+
+  <h2>영상이 열리지 않을 때</h2>
+  <p>밴드·휴대폰 영상은 HEVC(H.265) 형식인 경우가 많습니다. 대부분의 최근 PC는 Edge·Chrome에서 열리지만,
+  '이 영상 형식을 해석하지 못합니다'라는 메시지가 나오면 영상을 H.264(mp4)로 변환해서 다시 고르세요.</p>
+</main>
+</body>
+</html>

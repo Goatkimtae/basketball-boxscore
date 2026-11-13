@@ -25,6 +25,7 @@ SEARCH_TOP = 0.65                # hoops are searched in the top part of the fra
 # hue steps, so the range wraps through red. Size and shape filters keep jerseys out.
 BALL_HSV_RANGES = (((0, 100, 70), (22, 255, 255)), ((176, 100, 70), (180, 255, 255)))
 BALL_AREA = (12, 160)
+BALL_BLUR = 0                    # Gaussian blur (px) before the colour test; 0 = off
 
 SIDES = ("왼쪽", "오른쪽")
 
@@ -227,7 +228,7 @@ def detect_ball(video: Video, hoops: np.ndarray, progress=None, cancel=None) -> 
         m = np.float32([[1, 0, hx - php[1]], [0, 1, hy - php[2]]])
         prev = cv2.warpAffine(pf, m, (f.shape[1], f.shape[0]), borderMode=cv2.BORDER_REPLICATE)
         cur, prv = f[y0:y1, x0:x1], prev[y0:y1, x0:x1]
-        hsv = cv2.cvtColor(cur, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(cv2.GaussianBlur(cur, (BALL_BLUR, BALL_BLUR), 0) if BALL_BLUR else cur, cv2.COLOR_BGR2HSV)
         orange = cv2.inRange(hsv, *BALL_HSV_RANGES[0])
         for lo, hi in BALL_HSV_RANGES[1:]:
             orange |= cv2.inRange(hsv, lo, hi)
@@ -246,6 +247,54 @@ def detect_ball(video: Video, hoops: np.ndarray, progress=None, cancel=None) -> 
                              bw=float(bw), hx=float(hx), hy=float(hy), rim_y=float(rim_y), w=float(w), hh=float(hh)))
     return dets
 
+
+
+def track_filter(dets: list[dict], max_gap: float = 0.12, step_px: float = 20.0, min_len: int = 4, min_move: float = 10.0) -> list[dict]:
+    """Keep detections that form a moving chain over consecutive frames. Decoder colour noise
+    (jersey edges, the red rim) appears as isolated or static blobs; a ball in flight moves smoothly."""
+    ds = sorted(dets, key=lambda d: d["t"])
+    by_t: dict = {}
+    for d in ds:
+        by_t.setdefault(d["t"], []).append(d)
+    times = sorted(by_t)
+    prev: dict = {}
+    used: set = set()
+    for ti, t in enumerate(times):
+        cands = []
+        for t2 in times[max(0, ti - 4):ti]:
+            if t - t2 > max_gap:
+                continue
+            frames = max(1, int(math.floor((t - t2) * 30 + 0.5)))
+            for a in by_t[t2]:
+                for b in by_t[t]:
+                    if a["side"] != b["side"]:
+                        continue
+                    dist = math.hypot(a["bx"] - b["bx"], a["by"] - b["by"])
+                    if dist <= step_px * frames:
+                        cands.append((dist / frames, a, b))
+        cands.sort(key=lambda c: c[0])
+        taken_a, taken_b = set(), set()
+        for _, a, b in cands:
+            if id(a) in taken_a or id(b) in taken_b or id(a) in used:
+                continue
+            prev[id(b)] = a
+            taken_a.add(id(a)); taken_b.add(id(b)); used.add(id(a))
+    keep = []
+    for h in ds:
+        if id(h) in used:
+            continue                      # not a chain end
+        chain, d = [], h
+        while d is not None:
+            chain.append(d)
+            d = prev.get(id(d))
+        if len(chain) < min_len:
+            continue
+        xs = [c["bx"] for c in chain]
+        ys = [c["by"] for c in chain]
+        if max(max(xs) - min(xs), max(ys) - min(ys)) < min_move:
+            continue
+        keep.extend(chain)
+    return keep
 
 # ---------------------------------------------------------------- shots
 @dataclass
@@ -348,6 +397,7 @@ def analyze(video_path: str, profile: GymProfile, progress=None, cancel=None) ->
 
     hoops = track_hoops(video, profile, 2, lambda l, f: prog(l, f, 0.0, 0.6), cancel)
     dets = detect_ball(video, hoops, lambda l, f: prog(l, f, 0.6, 0.4), cancel)
+    dets = track_filter(dets)
     shots = group_shots(dets)
     judge_made(shots, dets)
     if progress:

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HoopStat 농구 기록</title>
+<meta name="description" content="농구 경기 영상에서 야투를 자동으로 찾아 박스스코어를 만드는 웹 앱. 영상은 내 PC 밖으로 나가지 않습니다.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#1f2a55">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img src="icon-192.png" alt="" width="36" height="36">
+    <div>
+      <h1>HoopStat</h1>
+      <p>농구 경기 영상 → 야투 자동 기록 → 박스스코어</p>
+    </div>
+  </div>
+  <button id="installBtn" class="ghost" hidden>앱으로 설치</button>
+</header>
+
+<main>
+  <p id="browserWarn" class="warn" hidden></p>
+
+  <section class="card" id="step1">
+    <h2><span class="num">1</span>영상과 설정</h2>
+    <div class="form">
+      <label for="videoInput">경기 영상</label>
+      <div class="row">
+        <input type="file" id="videoInput" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v">
+        <span id="videoInfo" class="muted"></span>
+      </div>
+
+      <label for="profileSel">체육관 설정</label>
+      <div class="row">
+        <select id="profileSel"></select>
+        <button id="newProfileBtn" class="ghost">새로 만들기(골대 표시)…</button>
+        <button id="delProfileBtn" class="ghost danger" title="고른 체육관 설정 지우기">지우기</button>
+        <span class="muted">처음 가는 체육관만 한 번 하면 됩니다.</span>
+      </div>
+
+      <label for="team_left">왼쪽 골대 공격 팀</label>
+      <div class="row">
+        <input id="team_left" value="빨강" size="12">
+        <select id="color_left" aria-label="왼쪽 골대 공격 팀 색"></select>
+      </div>
+
+      <label for="team_right">오른쪽 골대 공격 팀</label>
+      <div class="row">
+        <input id="team_right" value="남색" size="12">
+        <select id="color_right" aria-label="오른쪽 골대 공격 팀 색"></select>
+      </div>
+
+      <label for="switch_time">공격 방향 바뀌는 시각</label>
+      <div class="row">
+        <input id="switch_time" inputmode="decimal" size="8" placeholder="예: 1200">
+        <span class="muted">초 (후반 시작 등. 없으면 비움)</span>
+      </div>
+
+      <label for="title">제목</label>
+      <div class="row"><input id="title" class="wide" placeholder="비우면 '팀 vs 팀 박스스코어'"></div>
+    </div>
+  </section>
+
+  <section class="card" id="step2">
+    <h2><span class="num">2</span>자동 분석</h2>
+    <div class="row">
+      <button id="runBtn" class="primary">분석 시작</button>
+      <button id="cancelBtn" class="ghost" disabled>취소</button>
+      <progress id="bar" max="1" value="0"></progress>
+      <span id="status" class="status">영상을 고르고, 체육관 설정을 고른 뒤 '분석 시작'을 누르세요.</span>
+    </div>
+  </section>
+
+  <section class="card" id="step3">
+    <h2><span class="num">3</span>검토와 수정</h2>
+    <p class="muted">자동 기록은 야투 시도와 성공/실패만입니다. 리바운드·어시스트·파울·턴오버·자유투·등번호는 '사건 추가'나 '수정'으로 넣으세요.</p>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tabEvents" aria-selected="true" aria-controls="paneEvents">사건 기록</button>
+      <button role="tab" id="tabBox" aria-selected="false" aria-controls="paneBox">박스스코어</button>
+    </div>
+    <div id="paneEvents" role="tabpanel" aria-labelledby="tabEvents">
+      <div class="toolbar">
+        <button id="sceneBtn">장면 보기</button>
+        <button id="editBtn">수정…</button>
+        <button id="addBtn">사건 추가…</button>
+        <button id="delBtn" class="danger">삭제</button>
+        <span class="muted">줄을 누르면 고르고, 두 번 누르면 바로 수정합니다.</span>
+      </div>
+      <div class="scroll">
+        <table class="grid" id="eventTable">
+          <thead><tr><th>시각(초)</th><th>팀</th><th>등번호</th><th>기록</th><th>세부</th><th>결과</th><th>출처</th><th>신뢰도</th><th class="l">비고</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="emptyEvents" class="muted center">아직 기록이 없습니다. 분석을 시작하거나 '사건 추가'로 직접 넣으세요.</p>
+    </div>
+    <div id="paneBox" role="tabpanel" aria-labelledby="tabBox" hidden>
+      <div class="scroll"><table class="grid num" id="boxTable"><thead></thead><tbody></tbody></table></div>
+      <ul id="checks" class="checks"></ul>
+    </div>
+  </section>
+
+  <section class="card" id="step4">
+    <h2><span class="num">4</span>저장</h2>
+    <div class="row">
+      <button id="xlsxBtn">엑셀로 저장</button>
+      <button id="htmlBtn">웹페이지로 저장</button>
+      <button id="csvBtn">CSV로 저장</button>
+      <span class="sep"></span>
+      <button id="saveWorkBtn" class="ghost">작업 저장</button>
+      <label class="button ghost" for="openWork">작업 열기</label>
+      <input type="file" id="openWork" accept=".json,application/json" hidden>
+    </div>
+    <p class="muted">웹페이지로 저장한 파일을 GitHub Pages 저장소에 index.html로 올리면 링크로 공유할 수 있습니다. 작업 내용은 이 브라우저에 자동 저장됩니다.</p>
+  </section>
+
+  <footer class="foot">
+    영상은 인터넷에 올라가지 않고 이 PC의 브라우저 안에서만 분석됩니다. ·
+    <a href="사용법.html">사용법</a> ·
+    <a href="../">공유된 박스스코어</a>
+  </footer>
+</main>
+
+<dialog id="profileDlg" aria-labelledby="profileTitle">
+  <form method="dialog" class="dlg">
+    <h3 id="profileTitle">체육관 설정: 양쪽 골대 표시</h3>
+    <ol class="muted small">
+      <li>아래 막대로 <b>왼쪽 골대</b>가 보이는 장면을 찾고, 림(고리) 한가운데를 누르세요.</li>
+      <li>'오른쪽 골대'를 고르고 같은 방법으로 오른쪽 골대 림을 누르세요.</li>
+      <li>이름을 정하고 저장하면, 같은 체육관 영상은 다음부터 바로 분석합니다.</li>
+    </ol>
+    <canvas id="pfCanvas" class="frame" width="768" height="432"></canvas>
+    <div class="row">
+      <button type="button" data-jump="-5">◀ 5초</button>
+      <button type="button" data-jump="-0.5">◀ 0.5초</button>
+      <input type="range" id="pfRange" min="0" max="100" step="0.1" value="0" class="grow" aria-label="영상 위치">
+      <button type="button" data-jump="0.5">0.5초 ▶</button>
+      <button type="button" data-jump="5">5초 ▶</button>
+      <span id="pfTime" class="mono">0.0초</span>
+    </div>
+    <div class="row">
+      <span>지금 표시할 골대:</span>
+      <label><input type="radio" name="pfSide" value="왼쪽" checked> 왼쪽 골대</label>
+      <label><input type="radio" name="pfSide" value="오른쪽"> 오른쪽 골대</label>
+      <span class="grow"></span>
+      <figure class="thumb"><canvas id="thumb왼쪽" width="168" height="140"></canvas><figcaption>왼쪽</figcaption></figure>
+      <figure class="thumb"><canvas id="thumb오른쪽" width="168" height="140"></canvas><figcaption>오른쪽</figcaption></figure>
+    </div>
+    <div class="row">
+      <label for="pfName">체육관 이름</label>
+      <input id="pfName" value="우리 체육관">
+      <span class="grow"></span>
+      <button value="cancel" class="ghost">취소</button>
+      <button id="pfSave" type="button" class="primary" disabled>저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="eventDlg" aria-labelledby="eventTitle">
+  <form method="dialog" class="dlg narrow" id="eventForm">
+    <h3 id="eventTitle">사건 추가</h3>
+    <div class="form">
+      <label for="evTime">시각(초)</label><input id="evTime" inputmode="decimal" required>
+      <label for="evTeam">팀</label><select id="evTeam"></select>
+      <label for="evPlayer">등번호</label><input id="evPlayer" placeholder="모르면 비움 → '미상'">
+      <label for="evType">기록</label><select id="evType"></select>
+      <label for="evDetail">세부</label><select id="evDetail"></select>
+      <label for="evResult">결과</label><select id="evResult"><option value=""></option><option>성공</option><option>실패</option></select>
+      <label for="evNote">비고</label><input id="evNote" class="wide">
+    </div>
+    <div class="row end">
+      <button value="cancel" class="ghost" formnovalidate>취소</button>
+      <button id="evOk" value="ok" class="primary">확인</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="sceneDlg" aria-labelledby="sceneTitle">
+  <form method="dialog" class="dlg">
+    <h3 id="sceneTitle">장면 보기</h3>
+    <video id="sceneVideo" controls muted playsinline class="frame"></video>
+    <div class="row">
+      <button type="button" id="sceneReplay">이 장면 2초 전부터 다시 재생</button>
+      <span class="muted">아래는 기록 시각 기준 −1초부터 0.5초 간격 장면입니다.</span>
+    </div>
+    <div id="sceneGrid" class="scene-grid"></div>
+    <div class="row end"><button value="close" class="primary">닫기</button></div>
+  </form>
+</dialog>
+
+<video id="vid" muted playsinline preload="auto" hidden></video>
+
+<script src="vendor/xlsx.full.min.js" defer></script>
+<script src="stats.js"></script>
+<script src="export.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -121,3 +121,11 @@ def test_video_with_korean_file_name(tmp_path):
     frames = list(v.iter(step=1))
     assert len(frames) == 20
     assert v.frame_at(1.0) is not None
+
+
+def test_track_filter_drops_isolated_and_static_blobs():
+    flight = [_det(1.0 + i / 30, 450 + i * 6, 100 + i * 3) for i in range(8)]      # moving ball
+    static = [_det(1.0 + i / 30, 520, 141) for i in range(8)]                     # rim edge flicker, never moves
+    lone = [_det(2.0, 600, 120)]                                                 # one-frame blob
+    kept = engine.track_filter(flight + static + lone)
+    assert sorted(d["bx"] for d in kept) == sorted(d["bx"] for d in flight)
