@@ -20,8 +20,7 @@
     REB_DT: 0.3,        // rebound: this long after the ball was last seen at the rim
     FOUL_BEFORE: 3.0,   // a fouled shot reaches the rim up to this long before the whistle
     FOUL_AFTER: 1.5,    // ... or this long after it
-    FT_MIN: 4, FT_MAX: 120,      // first free throw this long after the whistle
-    FT2_MIN: 3.5, FT2_MAX: 25,   // second free throw this long after the first
+    FT_MIN: 4, FT_MAX: 120,      // the free throw comes this long after the whistle
   };
   const r1 = (x) => Math.round(x * 10) / 10;
 
@@ -61,7 +60,8 @@
     return { kept: out, dropped };
   }
 
-  /** Shooting fouls: a whistle right at a shot, then one or two shots at the same hoop after a pause. */
+  /** Shooting fouls: a whistle right at a shot, then one shot at the same hoop after a pause.
+      Team rule: one free throw per shooting foul. */
   function freeThrowTrips(shots, whistles, segs) {
     const used = new Set(), trips = [];
     for (const w of whistles) {
@@ -69,12 +69,9 @@
       const fg = near[near.length - 1];
       if (!fg) continue;
       const later = shots.filter((sh) => !used.has(sh) && sh !== fg && sh.start > w.t + P.FT_MIN);
-      const ft1 = later[0];
-      if (!ft1 || ft1.side !== fg.side || ft1.start - w.t > P.FT_MAX) continue;
-      const fts = [ft1];
-      const ft2 = later[1];
-      if (!fg.made && ft2 && ft2.side === fg.side && ft2.start - ft1.end >= P.FT2_MIN && ft2.start - ft1.end <= P.FT2_MAX
-        && timeOn(segs, OTHER_SIDE[fg.side], ft1.end, ft2.start) < P.FLIP_MIN) fts.push(ft2);
+      const ft = later[0];
+      if (!ft || ft.side !== fg.side || ft.start - w.t > P.FT_MAX) continue;
+      const fts = [ft];
       for (const s of [fg, ...fts]) used.add(s);
       trips.push({ w, fg, fts });
     }
@@ -154,12 +151,14 @@
         const andOne = fg.made;
         if (andOne) fgEvent(fg, team, '. 슛 직후 휘슬 → 앤드원');
         add({ time: w.t, team: other(team), type: '파울', detail: '슈팅파울', confidence: '낮음',
-          note: `${fg.start.toFixed(1)}초 슛 직후 휘슬(${w.t.toFixed(1)}초, ${w.dur.toFixed(1)}초간) → 슈팅 파울. 이어서 같은 골대 자유투 ${fts.length}개.`
+          note: `${fg.start.toFixed(1)}초 슛 직후 휘슬(${w.t.toFixed(1)}초, ${w.dur.toFixed(1)}초간) → 슈팅 파울. 이어서 같은 골대 자유투 1개.`
             + (andOne ? ' 슛이 들어가 앤드원.' : ' 이 실패한 슛은 야투 시도로 세지 않음(FIBA).') });
-        const details = andOne ? ['앤드원'] : fts.length === 2 ? ['3점슛 파울 1구', '3점슛 파울 2구'] : ['2점슛 파울 1구'];
-        fts.forEach((ft, k) => add({ time: ft.start, team, type: '자유투', detail: details[k], result: ft.made ? '성공' : '실패',
-          side: ft.side, confidence: '낮음',
-          note: `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 던진 ${k + 1}번째 슛 → 자유투로 판단. 개수로 정한 세부: ${details[k]}(팀 규칙)` }));
+        const detail = andOne ? '앤드원' : '2점슛 파울';
+        for (const ft of fts) {
+          add({ time: ft.start, team, type: '자유투', detail, result: ft.made ? '성공' : '실패', side: ft.side, confidence: '낮음',
+            note: `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 던진 슛 → 자유투로 판단. 팀 규칙: 슈팅 파울은 자유투 1개`
+              + (andOne ? ', 앤드원은 성공 시 1점.' : ", 성공 시 2점. 3점슛을 던지다 당한 파울이면 세부를 '3점슛 파울'로 바꾸면 3점.") });
+        }
         last = fts[fts.length - 1];
       }
       if (last.made) { poss = other(team); since = last.end; return; }

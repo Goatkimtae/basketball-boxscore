@@ -17,9 +17,9 @@ def test_team_free_throw_rule_and_totals():
     events = [
         ev(1, "A", "야투", "2점", "성공", "7"),
         ev(2, "A", "야투", "3점", "성공", "7"),
-        ev(3, "A", "자유투", "2점슛 파울 1구", "성공", "9"),   # 2 points (team rule)
-        ev(4, "A", "자유투", "3점슛 파울 1구", "성공", "9"),   # 2 points
-        ev(5, "A", "자유투", "3점슛 파울 2구", "실패", "9"),   # 0
+        ev(3, "A", "자유투", "2점슛 파울", "성공", "9"),      # 2 points (team rule: one FT)
+        ev(4, "A", "자유투", "3점슛 파울", "성공", "9"),      # 3 points
+        ev(5, "A", "자유투", "3점슛 파울", "실패", "9"),      # 0
         ev(6, "A", "자유투", "앤드원", "성공"),               # 1 point, player unknown
         ev(7, "B", "야투", "2점", "실패", "11"),
         ev(8, "A", "리바운드", "수비", "", "9"),
@@ -31,14 +31,14 @@ def test_team_free_throw_rule_and_totals():
     box = stats.box_score(events, ["A", "B"])
     a = dict(box["teams"])["A"]
     b = dict(box["teams"])["B"]
-    assert a["PTS"] == 2 + 3 + 2 + 2 + 1
+    assert a["PTS"] == 2 + 3 + 2 + 3 + 1
     assert (a["FGM"], a["FGA"], a["3PM"], a["3PA"], a["FTM"], a["FTA"]) == (2, 2, 1, 1, 3, 4)
     assert a["FT%"] == 75.0 and a["FG%"] == 100.0
     assert (a["DREB"], a["REB"], a["STL"], a["AST"]) == (1, 1, 1, 1)
     assert (b["PTS"], b["FGA"], b["PF"], b["TO"], b["FG%"]) == (0, 1, 1, 1, 0.0)
     players = dict(box["players"]["A"])
     assert list(players) == ["7", "9", "미상"]
-    assert players["7"]["PTS"] == 5 and players["9"]["PTS"] == 4 and players["미상"]["PTS"] == 1
+    assert players["7"]["PTS"] == 5 and players["9"]["PTS"] == 5 and players["미상"]["PTS"] == 1
     assert sum(s["PTS"] for _, s in box["players"]["A"]) == a["PTS"]
 
 

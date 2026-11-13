@@ -9,7 +9,7 @@ from __future__ import annotations
 TYPES = ("야투", "자유투", "리바운드", "어시스트", "스틸", "블록", "턴오버", "파울")
 DETAILS = {
     "야투": ("2점", "3점"),
-    "자유투": ("2점슛 파울 1구", "3점슛 파울 1구", "3점슛 파울 2구", "앤드원", "기타"),
+    "자유투": ("2점슛 파울", "3점슛 파울", "앤드원", "기타"),
     "리바운드": ("공격", "수비"),
     "파울": ("개인파울", "슈팅파울", "공격자파울"),
 }
@@ -17,7 +17,10 @@ RESULTS = ("성공", "실패")
 
 # Team rule (user): 2-point shot foul -> one free throw worth 2; 3-point shot foul -> two free
 # throws worth 2 and 1. And-one follows KBL 34.2.2 (one free throw, 1 point).
-FT_POINTS = {"2점슛 파울 1구": 2, "3점슛 파울 1구": 2, "3점슛 파울 2구": 1, "앤드원": 1, "기타": 1}
+# Team rule: one free throw per shooting foul, worth the shot's value (2 or 3) if made; and-one 1 point.
+# The '…1구/2구' names come from records saved under the earlier 2+1 rule and keep their old values.
+FT_POINTS = {"2점슛 파울": 2, "3점슛 파울": 3, "앤드원": 1, "기타": 1,
+             "2점슛 파울 1구": 2, "3점슛 파울 1구": 2, "3점슛 파울 2구": 1}
 
 COLS = ("FGM", "FGA", "FG%", "2PM", "2PA", "2P%", "3PM", "3PA", "3P%", "FTM", "FTA", "FT%",
         "OREB", "DREB", "REB", "AST", "STL", "BLK", "TO", "PF", "PTS")

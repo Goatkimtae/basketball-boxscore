@@ -39,22 +39,29 @@ test('ball lost without a shot is a turnover', () => {
   assert.ok(to.time >= 18 && to.time <= 22, `turnover time ${to.time}`);
 });
 
-test('whistle at a missed shot then one shot after a pause: 2-point shooting foul, one free throw worth 2', () => {
+test('whistle at a missed shot then one shot after a pause: shooting foul, one free throw worth 2', () => {
   const r = Flow.infer({ shots: [shot(40, '오른쪽'), shot(60, '오른쪽', true), shot(75, '왼쪽')], track: track([['R', 30, 62], ['L', 66, 80]], 80),
     whistles: [{ t: 40.6, dur: 0.6, f: 3000 }] }, S);
-  assert.deepStrictEqual(brief(r).slice(0, 3), ['40.6|빨강|파울|슈팅파울|', '60|남색|자유투|2점슛 파울 1구|성공', '75|빨강|야투|2점|실패']);
+  assert.deepStrictEqual(brief(r).slice(0, 3), ['40.6|빨강|파울|슈팅파울|', '60|남색|자유투|2점슛 파울|성공', '75|빨강|야투|2점|실패']);
   const box = Object.fromEntries(Stats.boxScore(r.events, ['빨강', '남색']).teams);
   assert.strictEqual(box['남색'].PTS, 2);
   assert.strictEqual(box['남색'].FGA, 0, 'the fouled miss is not a field goal attempt');
   assert.strictEqual(box['빨강'].PF, 1);
 });
 
-test('two shots after the whistle: 3-point shooting foul (2 + 1 points)', () => {
-  const r = Flow.infer({ shots: [shot(40, '오른쪽'), shot(60, '오른쪽', true), shot(68, '오른쪽', true)], track: track([['R', 30, 80]], 80),
+test('team rule: only one free throw per foul; a later shot at the same hoop is a field goal', () => {
+  // missed free throw at 60, offensive rebound, put-back at 64
+  const r = Flow.infer({ shots: [shot(40, '오른쪽'), shot(60, '오른쪽'), shot(64, '오른쪽', true)], track: track([['R', 30, 80]], 80),
     whistles: [{ t: 40.5, dur: 0.8, f: 3000 }] }, S);
-  const ft = r.events.filter((e) => e.type === '자유투');
-  assert.deepStrictEqual(ft.map((e) => e.detail), ['3점슛 파울 1구', '3점슛 파울 2구']);
-  assert.strictEqual(Object.fromEntries(Stats.boxScore(r.events, ['빨강', '남색']).teams)['남색'].PTS, 3);
+  assert.deepStrictEqual(brief(r), ['40.5|빨강|파울|슈팅파울|', '60|남색|자유투|2점슛 파울|실패', '61.3|남색|리바운드|공격|', '64|남색|야투|2점|성공']);
+});
+
+test('a free throw for a 3-point foul counts 3 points when made', () => {
+  const ev = [{ time: 60, team: '남색', type: '자유투', detail: '3점슛 파울', result: '성공' },
+    { time: 70, team: '남색', type: '자유투', detail: '2점슛 파울', result: '성공' },
+    { time: 80, team: '남색', type: '자유투', detail: '앤드원', result: '성공' }];
+  const s = Object.fromEntries(Stats.boxScore(ev, ['빨강', '남색']).teams)['남색'];
+  assert.deepStrictEqual([s.PTS, s.FTM, s.FTA], [6, 3, 3]);
 });
 
 test('made shot with a whistle: and-one, one free throw worth 1', () => {

@@ -5,13 +5,14 @@
 const TYPES = ['야투', '자유투', '리바운드', '어시스트', '스틸', '블록', '턴오버', '파울', '휘슬'];   // 휘슬: review marker, not counted
 const DETAILS = {
   야투: ['2점', '3점'],
-  자유투: ['2점슛 파울 1구', '3점슛 파울 1구', '3점슛 파울 2구', '앤드원', '기타'],
+  자유투: ['2점슛 파울', '3점슛 파울', '앤드원', '기타'],
   리바운드: ['공격', '수비'],
   파울: ['개인파울', '슈팅파울', '공격자파울'],
 };
-// Team rule: 2-point shot foul -> one FT worth 2; 3-point shot foul -> two FTs worth 2 and 1.
+// Team rule: a shooting foul gives ONE free throw, worth the shot's value (2 or 3) if made.
 // And-one follows KBL 34.2.2 (one FT, 1 point).
-const FT_POINTS = { '2점슛 파울 1구': 2, '3점슛 파울 1구': 2, '3점슛 파울 2구': 1, 앤드원: 1, 기타: 1 };
+// The '…1구/2구' names are from files saved under the earlier 2+1 rule and keep their old values.
+const FT_POINTS = { '2점슛 파울': 2, '3점슛 파울': 3, 앤드원: 1, 기타: 1, '2점슛 파울 1구': 2, '3점슛 파울 1구': 2, '3점슛 파울 2구': 1 };
 const COLS = ['FGM', 'FGA', 'FG%', '2PM', '2PA', '2P%', '3PM', '3PA', '3P%', 'FTM', 'FTA', 'FT%',
   'OREB', 'DREB', 'REB', 'AST', 'STL', 'BLK', 'TO', 'PF', 'PTS'];
 const KO = { FGM: '야투 성공', FGA: '야투 시도', '2PM': '2점 성공', '2PA': '2점 시도', '3PM': '3점 성공', '3PA': '3점 시도',
@@ -92,6 +93,8 @@ function checks(events) {
   }
   const auto = events.filter((e) => e.source === '자동' && e.type === '야투').length;
   if (auto) msgs.push(`자동으로 찾은 야투 ${auto}개는 모두 2점으로 기록했습니다. 3점슛은 '수정'에서 바꿔 주세요.`);
+  const autoFt = events.filter((e) => e.source === '자동' && e.type === '자유투' && e.detail === '2점슛 파울').length;
+  if (autoFt) msgs.push(`자동으로 찾은 자유투 ${autoFt}개는 2점슛 파울(성공 시 2점)로 기록했습니다. 3점슛을 던지다 파울을 당했으면 세부를 '3점슛 파울'로 바꿔 주세요(성공 시 3점).`);
   const made = events.filter((e) => e.type === '야투' && e.result === '성공').length;
   const ast = events.filter((e) => e.type === '어시스트').length;
   if (made && !ast) msgs.push(`성공한 야투 ${made}개 중 어시스트가 있었는지는 자동으로 판정하지 않습니다. 장면을 보고 '사건 추가'로 넣어 주세요.`);
