@@ -99,7 +99,9 @@ function checks(events) {
   const ast = events.filter((e) => e.type === '어시스트').length;
   if (made && !ast) msgs.push(`성공한 야투 ${made}개 중 어시스트가 있었는지는 자동으로 판정하지 않습니다. 장면을 보고 '사건 추가'로 넣어 주세요.`);
   const wh = events.filter((e) => e.type === '휘슬').length;
-  if (wh) msgs.push(`확인할 휘슬 ${wh}개가 있습니다. 파울이면 '수정'에서 기록을 파울로 바꿔 주세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
+  if (wh) msgs.push(`어느 팀 파울인지 정하지 못한 휘슬 ${wh}개가 있습니다. 장면을 보고 '수정'에서 파울로 바꿔 주세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
+  const autoPf = events.filter((e) => e.source === '자동' && e.type === '파울').length;
+  if (autoPf) msgs.push(`자동으로 찾은 파울 ${autoPf}개는 휘슬 뒤 경기가 멈춘 것으로 판단했습니다. 공격자 파울·바이얼레이션이었는지 장면 보기로 확인해 주세요.`);
   const noNum = events.filter((e) => e.team && !['휘슬'].includes(e.type) && !(e.player || '').trim()).length;
   if (noNum) msgs.push(`등번호가 없는 기록 ${noNum}개는 선수별 기록에서 '미상'으로 묶입니다. '등번호 넣기'로 채우면 개인 기록이 나옵니다.`);
   return msgs;

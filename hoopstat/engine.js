@@ -263,21 +263,71 @@ function judgeMade(shots, dets, windowSec = 2.5) {
   return shots;
 }
 
+/* ---------------------------------------------------------------- scene motion
+   Share of the floor area that changed between two sampled frames, after removing camera movement
+   (a patch of the upper background is matched between the frames). Players standing still - the
+   stoppage after a whistle, the set-up for a free throw - give low values. */
+const MOTION = { W: 192, PATCH: [48, 6, 96, 36], SEARCH_X: 14, SEARCH_Y: 6, THR: 18, TOP: 0.28, MIN_SCORE: 0.4 };
+
+class SceneMotion {
+  constructor() { this.prev = null; this.aligned = new cv.Mat(); this.diff = new cv.Mat(); this.res = new cv.Mat(); }
+
+  /** gray: full-size CV_8UC1. Returns the changed share (0..1), or null when the camera move can't be found. */
+  push(gray) {
+    const W = MOTION.W, H = Math.round((gray.rows * W) / gray.cols);
+    const cur = new cv.Mat();
+    cv.resize(gray, cur, new cv.Size(W, H), 0, 0, cv.INTER_AREA);
+    let m = null;
+    if (this.prev) {
+      const [px, py, pw, ph] = MOTION.PATCH;
+      const patch = this.prev.roi(new cv.Rect(px, py, pw, ph));
+      const sx0 = px - MOTION.SEARCH_X, sy0 = Math.max(0, py - MOTION.SEARCH_Y);
+      const area = cur.roi(new cv.Rect(sx0, sy0, pw + 2 * MOTION.SEARCH_X, ph + (py - sy0) + MOTION.SEARCH_Y));
+      cv.matchTemplate(area, patch, this.res, cv.TM_CCOEFF_NORMED);
+      const mm = cv.minMaxLoc(this.res);
+      patch.delete(); area.delete();
+      if (mm.maxVal >= MOTION.MIN_SCORE) {
+        const dx = sx0 + mm.maxLoc.x - px, dy = sy0 + mm.maxLoc.y - py;
+        const M = cv.matFromArray(2, 3, cv.CV_64F, [1, 0, dx, 0, 1, dy]);
+        cv.warpAffine(this.prev, this.aligned, M, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
+        M.delete();
+        cv.absdiff(cur, this.aligned, this.diff);
+        cv.threshold(this.diff, this.diff, MOTION.THR, 255, cv.THRESH_BINARY);
+        const y0 = Math.round(H * MOTION.TOP), x0 = 4 + Math.abs(dx), x1 = W - 4 - Math.abs(dx);
+        if (x1 > x0) {
+          const roi = this.diff.roi(new cv.Rect(x0, y0, x1 - x0, H - y0));
+          m = cv.countNonZero(roi) / (roi.rows * roi.cols);
+          roi.delete();
+        }
+      }
+      this.prev.delete();
+    }
+    this.prev = cur;
+    return m;
+  }
+
+  delete() { if (this.prev) this.prev.delete(); this.aligned.delete(); this.diff.delete(); this.res.delete(); }
+}
+
 /* ---------------------------------------------------------------- camera direction
-   Which hoop the camera shows, sampled on every 2nd frame: [t, side (0 none, 1 left, 2 right), x].
-   The play-flow step (flow.js) reads possession changes from it. */
+   Which hoop the camera shows, sampled on every 2nd frame: [t, side (0 none, 1 left, 2 right), x, motion].
+   motion is the scene motion share x 1000, or -1 when unknown. The play-flow step (flow.js) reads
+   possession changes and stoppages from it. */
 function cameraTrack(samples) {
   return samples.map((s) => {
     const h = hoopFromSample(s);
-    return [Math.round(s.t * 1000) / 1000, h ? (h[0] === HS.SIDES[0] ? 1 : 2) : 0, h ? Math.round(h[1]) : 0];
+    return [Math.round(s.t * 1000) / 1000, h ? (h[0] === HS.SIDES[0] ? 1 : 2) : 0, h ? Math.round(h[1]) : 0,
+      s.mv == null ? -1 : Math.round(s.mv * 10000) / 10];
   });
 }
 
 /* ---------------------------------------------------------------- whistle (audio)
-   A referee's whistle is a loud, steady tone between 2 and 4.8 kHz that holds for 0.4 s or more.
-   Voices put their energy below 1.5 kHz; shoe squeaks are as high but shorter (about 0.1-0.3 s).
+   A referee's whistle is a steady tone (a few close partials) between 2 and 4.8 kHz. In a gym it is
+   usually mixed with shouting, so the test does not compare it with the whole spectrum: the strongest
+   peak in the band must stand 20 dB over the band's median, and the band must hold more energy than
+   1-2 kHz, where voices are. This finds candidates only; flow.js keeps the ones after which play stops.
    Audio is averaged down to 16 kHz, then 32 ms windows every 10 ms. */
-const WH = { SR: 16000, N: 512, HOP: 160, BAND: [2000, 4800], LOW: 150, SHARE: 0.5, PEAK_DB: 12, GAP: 3, MIN_DUR: 0.4, MERGE: 1.0 };
+const WH = { SR: 16000, N: 512, HOP: 160, BAND: [2000, 4800], MID: [1000, 2000], PEAK_DB: 20, OVER_MID_DB: 3, GAP: 3, MIN_DUR: 0.3, MERGE: 1.0 };
 
 class WhistleDetector {
   constructor(sampleRate) {
@@ -289,7 +339,7 @@ class WhistleDetector {
     const bits = Math.log2(WH.N);
     this.rev = Uint32Array.from({ length: WH.N }, (_, i) => { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); return r; });
     this.k0 = Math.ceil((WH.BAND[0] * WH.N) / WH.SR); this.k1 = Math.floor((WH.BAND[1] * WH.N) / WH.SR);
-    this.kLow = Math.ceil((WH.LOW * WH.N) / WH.SR);
+    this.m0 = Math.ceil((WH.MID[0] * WH.N) / WH.SR); this.m1 = this.k0 - 1;
     this.band = new Float64Array(this.k1 - this.k0 + 1);
     this.on = []; this.freq = [];
   }
@@ -325,14 +375,14 @@ class WhistleDetector {
         }
       }
     }
-    let total = 0, bandSum = 0, peak = 0, peakK = this.k0;
-    for (let k = this.kLow; k <= N / 2; k++) {
+    let midSum = 0, bandSum = 0, peak = 0, peakK = this.k0;
+    for (let k = this.m0; k <= this.k1; k++) {
       const p = re[k] * re[k] + im[k] * im[k];
-      total += p;
-      if (k >= this.k0 && k <= this.k1) { this.band[k - this.k0] = p; bandSum += p; if (p > peak) { peak = p; peakK = k; } }
+      if (k < this.k0) midSum += p;
+      else { this.band[k - this.k0] = p; bandSum += p; if (p > peak) { peak = p; peakK = k; } }
     }
     let on = 0;
-    if (total > 1e-9 && bandSum / total > WH.SHARE) {
+    if (bandSum > 1e-9 && 10 * Math.log10(bandSum / (midSum + 1e-15)) > WH.OVER_MID_DB) {
       const sorted = Float64Array.from(this.band).sort();
       const med = sorted[sorted.length >> 1] + 1e-15;
       on = 10 * Math.log10(peak / med) > WH.PEAK_DB ? 1 : 0;
@@ -374,6 +424,7 @@ class Analyzer {
     this.tracker = new HoopTracker(templates);
     this.variants = (variants && variants.length ? variants : [{}]).map((p) => ({ params: p, ball: new BallDetector(p), dets: [] }));
     this.gray = new cv.Mat();
+    this.motion = new SceneMotion();
     this.samples = [];          // {i, t, 왼쪽:[..], 오른쪽:[..]}
     this.frames = new Map();    // i -> {t, mat, hp}
     this.next = 0;              // next frame index waiting for ball detection
@@ -390,7 +441,7 @@ class Analyzer {
       const roi = this.gray.roi(new cv.Rect(0, 0, rgba.cols, top));
       const m = this.tracker.match(roi);
       roi.delete();
-      this.samples.push({ i, t, ...m });
+      this.samples.push({ i, t, ...m, mv: this.motion.push(this.gray) });
     }
     this._drain(false);
   }
@@ -399,7 +450,7 @@ class Analyzer {
     this._drain(true);
     for (const f of this.frames.values()) f.mat.delete();
     this.frames.clear();
-    this.tracker.delete(); this.gray.delete();
+    this.tracker.delete(); this.gray.delete(); this.motion.delete();
     const results = this.variants.map((v) => {
       v.ball.delete();
       const kept = trackFilter(v.dets);
@@ -442,5 +493,5 @@ class Analyzer {
   }
 }
 
-if (typeof self !== 'undefined') Object.assign(self, { HS, WH, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
-if (typeof module !== 'undefined') module.exports = { HS, WH, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };
+if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, SceneMotion, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
+if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, SceneMotion, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };

@@ -1,5 +1,5 @@
 /* Offline cache for the app shell and the analysis libraries. Bump VERSION on every release. */
-const VERSION = 'hoopstat-v2';
+const VERSION = 'hoopstat-v3';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'stats.js', 'flow.js', 'export.js', 'engine.js', 'worker.js', '사용법.html',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png',
   'vendor/opencv.js', 'vendor/mp4box.all.min.js', 'vendor/xlsx.full.min.js'];

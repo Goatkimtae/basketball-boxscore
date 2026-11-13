@@ -229,7 +229,7 @@ $('runBtn').addEventListener('click', () => {
       const out = Flow.infer(r, s);
       S.events = Stats.mergeReanalysis(S.events, out.events);
       const n = out.summary, v = r.visibility;
-      const sound = r.audio === 'ok' ? `휘슬 ${n.whistles}번`
+      const sound = r.audio === 'ok' ? `휘슬로 보이는 소리 ${n.whistles}번 중 경기가 멈춘 ${n.fouls}번을 파울로 판단`
         : r.audio === 'none' ? '영상에 소리가 없어 파울·자유투는 판정하지 않음' : '이 브라우저가 소리 형식을 읽지 못해 파울·자유투는 판정하지 않음';
       status(`분석 끝(${fmtSec(r.seconds)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
         + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. 골대가 화면에 보인 비율 왼쪽 ${(v['왼쪽'] * 100).toFixed(0)}%, `
