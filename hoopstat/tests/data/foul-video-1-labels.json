@@ -1,0 +1,182 @@
+{
+ "video": "foul-video-1 (8 min 27 s, BAND 768x432 HEVC, same gym as the 92 s sample)",
+ "note": "Shot attempts checked by eye on 5 fps close-ups of the hoop. 'clear': ball clearly seen going to the rim. 'unsure': possible attempts. Side: L = left hoop, R = right hoop. Times are when the ball first nears the rim (s).",
+ "shots_clear": [
+  [
+   16.5,
+   "L"
+  ],
+  [
+   43.8,
+   "R"
+  ],
+  [
+   51.7,
+   "L"
+  ],
+  [
+   55.1,
+   "L"
+  ],
+  [
+   69.2,
+   "R"
+  ],
+  [
+   72.8,
+   "R"
+  ],
+  [
+   84.3,
+   "R"
+  ],
+  [
+   91.0,
+   "L"
+  ],
+  [
+   107.2,
+   "R"
+  ],
+  [
+   112.9,
+   "L"
+  ],
+  [
+   174.7,
+   "R"
+  ],
+  [
+   189.1,
+   "L"
+  ],
+  [
+   246.0,
+   "R"
+  ],
+  [
+   275.0,
+   "R"
+  ],
+  [
+   285.6,
+   "L"
+  ],
+  [
+   294.3,
+   "R"
+  ],
+  [
+   308.4,
+   "L"
+  ],
+  [
+   321.9,
+   "R"
+  ],
+  [
+   329.3,
+   "L"
+  ],
+  [
+   353.7,
+   "L"
+  ],
+  [
+   378.4,
+   "L"
+  ],
+  [
+   387.7,
+   "R"
+  ],
+  [
+   389.9,
+   "R"
+  ],
+  [
+   403.7,
+   "L"
+  ],
+  [
+   405.3,
+   "L"
+  ],
+  [
+   436.4,
+   "L"
+  ],
+  [
+   444.9,
+   "R"
+  ],
+  [
+   452.0,
+   "L"
+  ],
+  [
+   482.2,
+   "L"
+  ]
+ ],
+ "shots_unsure": [
+  [
+   148.8,
+   "L"
+  ],
+  [
+   155.9,
+   "R"
+  ],
+  [
+   210.8,
+   "L"
+  ],
+  [
+   306.5,
+   "L"
+  ],
+  [
+   440.9,
+   "L"
+  ],
+  [
+   459.5,
+   "R"
+  ],
+  [
+   502.8,
+   "L"
+  ],
+  [
+   18.6,
+   "L"
+  ],
+  [
+   334.5,
+   "L"
+  ]
+ ],
+ "fouls": [
+  {
+   "whistle": 74.8,
+   "fouled": "white (attacks right)",
+   "free_throw": null,
+   "restart": "side inbound"
+  },
+  {
+   "whistle": 336.7,
+   "fouled": "black #11 (attacks left)",
+   "free_throw": {
+    "t": 353.7,
+    "side": "L",
+    "result": "missed"
+   }
+  }
+ ],
+ "detector_results": {
+  "strict colour (S>=100), Python on HEVC": "13/29 clear shots, 4 false",
+  "S>=70, Python on HEVC": "23/29, 6 false",
+  "S>=70, browser engine on ffmpeg RGBA": "23/29, 33 false, 20 false made - not used"
+ }
+}
