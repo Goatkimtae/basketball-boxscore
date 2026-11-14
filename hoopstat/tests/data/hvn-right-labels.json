@@ -1,0 +1,17 @@
+{
+ "video": "20261114_H vs N_1_r.mp4 (8 min 23 s, 1280x720 HEVC 8.6 Mbps, fixed camera, right hoop only, far away)",
+ "rim_768": [
+  623,
+  169
+ ],
+ "hoop_found": "99.7% of frames",
+ "checked": "Each shot the detector reported (rim/net rules of 2026-11-14) looked at on 5 fps close-ups; missed shots were not searched for.",
+ "result": {
+  "shots": 18,
+  "made": 5,
+  "real_shots": "about 5-6 (262.9?, 319.4, 434.7?, 480.4 = 481.8 same shot, 84.3?)",
+  "false_shots": "about 12: 5.0, 28.3, 121.6, 161.6, 175.5, 192.9, 226.1, 372.8, 448.3, 484.2 and others - no ball near the rim",
+  "made_check": "5.0 and 448.3 clearly wrong; 84.3, 319.4, 372.8 unclear"
+ },
+ "cause_seen": "Moving orange blobs on the backboard just above-left of the rim (768 px: x 615, y 137-160) with no ball there in the frame. Guess, not checked: reflections in the glass backboard."
+}
