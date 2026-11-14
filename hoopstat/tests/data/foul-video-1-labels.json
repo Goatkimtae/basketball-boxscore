@@ -177,6 +177,7 @@
  "detector_results": {
   "strict colour (S>=100), Python on HEVC": "13/29 clear shots, 4 false",
   "S>=70, Python on HEVC": "23/29, 6 false",
-  "S>=70, browser engine on ffmpeg RGBA": "23/29, 33 false, 20 false made - not used"
+  "S>=70, browser engine on ffmpeg RGBA": "23/29, 33 false, 20 false made - not used",
+  "strict colour + rim/net rules (2026-11-14)": "12/29, 4 false, 1 made (51.9 s; labelled a miss, unsure)"
  }
 }

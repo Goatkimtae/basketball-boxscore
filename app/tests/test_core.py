@@ -57,7 +57,7 @@ def _det(t, x, y, side="오른쪽"):
 
 def test_group_and_judge_made_vs_missed():
     made = [_det(1.0 + i * 0.033, 470 + i * 4, 100 + i * 2) for i in range(8)]          # arcs in above the rim
-    made += [_det(1.30 + i * 0.033, 501, 140 + i * 10) for i in range(4)]               # drops through the middle
+    made += [_det(1.30 + i * 0.033, 501, 146 + i * 10) for i in range(5)]               # drops through the middle (net)
     missed = [_det(5.0 + i * 0.033, 440 + i * 6, 110 + i * 2) for i in range(8)]        # comes in
     missed += [_det(5.30 + i * 0.033, 560 + i * 8, 130 - i * 3) for i in range(5)]      # kicks out to the side
     passing = [_det(9.0 + i * 0.033, 700 + i * 2, 100) for i in range(6)]               # crosses far from the rim

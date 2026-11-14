@@ -101,6 +101,12 @@ test('a stoppage whistle right after a missed shot: foul on the defence, no rebo
   assert.ok(!r.events.some((e) => e.type === '리바운드' && e.time < 100), 'no rebound after the fouled shot');
 });
 
+test('one-hoop video (fixed camera): a quick second shot is an offensive rebound, a late one a defensive rebound', () => {
+  const r = Flow.infer({ shots: [shot(10, '왼쪽'), shot(14, '왼쪽'), shot(40, '왼쪽')], track: track([['L', 0, 60]], 60) }, S);
+  assert.deepStrictEqual(r.events.filter((e) => e.type === '리바운드').map((e) => [e.team, e.detail]),
+    [['빨강', '공격'], ['남색', '수비'], ['남색', '수비']]);
+});
+
 test('re-analysis keeps jersey numbers typed on automatic records', () => {
   const old = [{ time: 9.9, team: '남색', player: '1', type: '리바운드', detail: '공격', source: '자동' },
     { time: 30, team: '빨강', player: '', type: '스틸', source: '수동' }];

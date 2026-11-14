@@ -184,7 +184,7 @@ $('pfCanvas').addEventListener('click', (ev) => {
     const tmp = document.createElement('canvas'); tmp.width = TW; tmp.height = TH; tmp.getContext('2d').putImageData(img, 0, 0);
     th.imageSmoothingEnabled = false; th.clearRect(0, 0, 168, 140); th.drawImage(tmp, 0, 0, 168, 140);
     if (side === '왼쪽' && !PF.marks['오른쪽']) document.querySelector('input[name=pfSide][value=오른쪽]').checked = true;
-    $('pfSave').disabled = Object.keys(PF.marks).length < 2;
+    $('pfSave').disabled = Object.keys(PF.marks).length < 1;   // one hoop is enough for a camera that films one half
     pfShow();
   });
 });
@@ -193,7 +193,7 @@ $('pfSave').addEventListener('click', () => {
   const all = profiles();
   if (all[name] && !confirm(`'${name}' 설정이 이미 있습니다. 바꿀까요?`)) return;
   all[name] = { created: new Date().toISOString() };
-  for (const side of SIDES) all[name][side] = { w: TW, h: TH, b64: b64(PF.marks[side].tpl) };
+  for (const side of SIDES) if (PF.marks[side]) all[name][side] = { w: TW, h: TH, b64: b64(PF.marks[side].tpl) };
   if (!lsSet(LS_PROFILES, all)) { alert('브라우저 저장 공간에 저장하지 못했습니다.'); return; }
   $('profileDlg').close();
   reloadProfiles(name);
@@ -211,7 +211,7 @@ $('runBtn').addEventListener('click', () => {
   const s = settings();
   if (!S.file) { alert('분석할 경기 영상을 고르세요.'); return; }
   const tpl = profileTemplates(s.profile);
-  if (!tpl || Object.keys(tpl).length < 2) { alert("체육관 설정이 없습니다. '새로 만들기'에서 양쪽 골대를 한 번 표시해 주세요."); return; }
+  if (!tpl || Object.keys(tpl).length < 1) { alert("체육관 설정이 없습니다. '새로 만들기'에서 영상에 보이는 골대를 한 번 표시해 주세요."); return; }
   if (!('VideoDecoder' in window)) { alert('이 브라우저는 분석 기능을 지원하지 않습니다. 최신 Edge 또는 Chrome을 쓰세요.'); return; }
   const w = new Worker('worker.js');
   S.worker = w;

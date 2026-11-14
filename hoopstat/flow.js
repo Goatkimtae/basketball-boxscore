@@ -30,6 +30,7 @@
     ON_SHOT: 2.5,       // a whistle this soon after a missed shot ends play on that shot (no rebound)
     FT_MIN: 4, FT_MAX: 40,       // the free throw comes this long after the whistle
     FT_STILL: 0.4,      // players stand still before a free throw: motion 3-0.7 s before it, share of median
+    OREB_GAP: 8,        // one-hoop video: the same team shooting again within this many seconds kept the ball
   };
   const r1 = (x) => Math.round(x * 10) / 10;
 
@@ -124,6 +125,9 @@
     const other = (t) => (t === teams[0] ? teams[1] : teams[0]);
     const teamOf = (side, t) => Stats.teamFor(side, t, s);
     const segs = segments(result.track);
+    // a fixed camera that films one half never shows the other hoop, so it cannot tell where the ball went
+    const seen = ['왼쪽', '오른쪽'].filter((sd) => timeOn(segs, sd, -Infinity, Infinity) >= P.FLIP_MIN);
+    const oneHoop = seen.length === 1;
     const mo = motionOf(result.track);
     const { kept, dropped } = dropConflicts(result.shots || [], segs);
     const whistles = [...(result.whistles || [])].sort((a, b) => a.t - b.t);
@@ -166,6 +170,10 @@
       if (next) {
         const nextTeam = teamOf(next.side, next.t);
         const flip = timeOn(segs, away, last.end, next.t) >= P.FLIP_MIN;
+        if (oneHoop && nextTeam === team && next.t - last.end > P.OREB_GAP) {
+          return { time: t, team: opp, type: '리바운드', detail: '수비', confidence: '낮음',
+            note: `한쪽 골대만 찍은 영상: 다음 슛까지 ${Math.round(next.t - last.end)}초라 상대가 잡아 반대쪽으로 갔다 온 것으로 추정 → 수비 리바운드` };
+        }
         if (nextTeam === team && !flip) {
           return { time: t, team, type: '리바운드', detail: '공격', confidence: next.t - last.end <= 10 ? '보통' : '낮음',
             note: `다음 슛(${next.t.toFixed(1)}초)도 같은 팀이 같은 골대에서 던짐 → 공격 리바운드` };

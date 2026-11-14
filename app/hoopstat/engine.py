@@ -365,25 +365,41 @@ def group_shots(dets: list[dict], gap: float = 0.7, split: float = 20.0, merge_g
     return out
 
 
+def on_rim(d: dict) -> bool:
+    """Blobs sitting on the rim: the orange rim 'moves' when the camera shakes or the net sways."""
+    return abs(d["bx"] - d["hx"]) <= 0.35 * d["w"] and d["rim_y"] - 0.1 * d["hh"] <= d["by"] <= d["rim_y"] + 0.06 * d["hh"]
+
+
+MADE = dict(x=0.3, start=0.3, end=0.6, gap=0.07, span=0.4, step_x=0.25)
+
+
 def judge_made(shots: list[ShotCandidate], dets: list[dict], window: float = 2.5) -> None:
-    """Made = the ball is seen just above the rim centre and, within 0.6 s, just below it
-    (inside the net), on the same hoop. Anything else is recorded as missed."""
+    """Made = the ball is followed falling through the hoop: detections frame after frame (gaps up to
+    0.07 s) from just under the rim (0.3 x hoop height) down to 0.6 x hoop height within 0.4 s, near the
+    rim centre. A swaying net moves about but does not fall steadily. Same rule as the web app."""
     by_side = {s: sorted((d for d in dets if d["side"] == s), key=lambda d: d["t"]) for s in SIDES}
+    dy = lambda d: (d["by"] - d["rim_y"]) / d["hh"]
     for i, sh in enumerate(shots):
         nxt = shots[i + 1].start if i + 1 < len(shots) and shots[i + 1].side == sh.side else math.inf
         t_end = min(sh.end + window, nxt + 0.2)
-        ds = [d for d in by_side[sh.side] if sh.start - 0.1 <= d["t"] <= t_end]
-        above = [d for d in ds if d["by"] < d["rim_y"] - 0.05 * d["hh"] and abs(d["bx"] - d["hx"]) <= 0.35 * d["w"]]
-        below = [d for d in ds if d["rim_y"] + 0.08 * d["hh"] <= d["by"] <= d["rim_y"] + 1.1 * d["hh"]
-                 and abs(d["bx"] - d["hx"]) <= 0.22 * d["w"]]
-        hit = None
-        for b in below:
-            if any(0 < b["t"] - a["t"] <= 0.6 for a in above):
-                hit = b
-                break
+        ds = [d for d in by_side[sh.side] if sh.start - 0.1 <= d["t"] <= t_end
+              and abs(d["bx"] - d["hx"]) <= MADE["x"] * d["w"] and 0 < dy(d) <= 1.3]
+        hit, steps = None, 0
+        for a in range(len(ds)):
+            if hit or dy(ds[a]) > MADE["start"]:
+                continue
+            cur, n = ds[a], 0
+            for d in ds[a + 1:]:
+                if d["t"] - ds[a]["t"] > MADE["span"]:
+                    break
+                if 0 < d["t"] - cur["t"] <= MADE["gap"] and dy(d) > dy(cur) and abs(d["bx"] - cur["bx"]) <= MADE["step_x"] * cur["w"]:
+                    cur, n = d, n + 1
+                    if dy(cur) >= MADE["end"]:
+                        hit, steps = ds[a], n
+                        break
         sh.made = hit is not None
         sh.made_t = hit["t"] if hit else None
-        sh.confidence = "보통" if hit and sum(1 for b in below if abs(b["t"] - hit["t"]) <= 0.3) >= 2 else "낮음"
+        sh.confidence = "보통" if hit and steps >= 3 else "낮음"
 
 
 # ---------------------------------------------------------------- whole pipeline
@@ -397,7 +413,7 @@ def analyze(video_path: str, profile: GymProfile, progress=None, cancel=None) ->
 
     hoops = track_hoops(video, profile, 2, lambda l, f: prog(l, f, 0.0, 0.6), cancel)
     dets = detect_ball(video, hoops, lambda l, f: prog(l, f, 0.6, 0.4), cancel)
-    dets = track_filter(dets)
+    dets = track_filter([d for d in dets if not on_rim(d)])
     shots = group_shots(dets)
     judge_made(shots, dets)
     if progress:

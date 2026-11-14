@@ -246,19 +246,42 @@ function groupShots(dets, opt = {}) {
   return out;
 }
 
+/* The orange rim itself shows up as a "moving orange blob" when the camera shakes or the net sways.
+   Blobs sitting on the rim are dropped before shots are grouped. */
+function onRim(d) {
+  return Math.abs(d.bx - d.hx) <= 0.35 * d.w && d.by >= d.rim_y - 0.1 * d.hh && d.by <= d.rim_y + 0.06 * d.hh;
+}
+
+/* Made = the ball is followed falling through the hoop: a chain of detections, frame after frame
+   (gaps up to 0.07 s), starting just under the rim (within 0.3 x hoop height) and going down to 0.6 x
+   hoop height within 0.4 s, near the rim centre. A swaying net (also red/orange on many hoops) moves
+   about but does not fall steadily, so it no longer counts as a basket. */
+const MADE = { X: 0.3, START: 0.3, END: 0.6, GAP: 0.07, SPAN: 0.4, STEP_X: 0.25 };
 function judgeMade(shots, dets, windowSec = 2.5) {
   const bySide = {};
   for (const s of HS.SIDES) bySide[s] = dets.filter((d) => d.side === s).sort((a, b) => a.t - b.t);
+  const dy = (d) => (d.by - d.rim_y) / d.hh;
   shots.forEach((sh, i) => {
     const next = i + 1 < shots.length && shots[i + 1].side === sh.side ? shots[i + 1].start : Infinity;
     const tEnd = Math.min(sh.end + windowSec, next + 0.2);
-    const ds = bySide[sh.side].filter((d) => d.t >= sh.start - 0.1 && d.t <= tEnd);
-    const above = ds.filter((d) => d.by < d.rim_y - 0.05 * d.hh && Math.abs(d.bx - d.hx) <= 0.35 * d.w);
-    const below = ds.filter((d) => d.by >= d.rim_y + 0.08 * d.hh && d.by <= d.rim_y + 1.1 * d.hh && Math.abs(d.bx - d.hx) <= 0.22 * d.w);
-    const hit = below.find((b) => above.some((a) => b.t - a.t > 0 && b.t - a.t <= 0.6)) || null;
+    const ds = bySide[sh.side].filter((d) => d.t >= sh.start - 0.1 && d.t <= tEnd
+      && Math.abs(d.bx - d.hx) <= MADE.X * d.w && dy(d) > 0 && dy(d) <= 1.3);
+    let hit = null, steps = 0;
+    for (let a = 0; a < ds.length && !hit; a++) {
+      if (dy(ds[a]) > MADE.START) continue;
+      let cur = ds[a], n = 0;
+      for (let b = a + 1; b < ds.length; b++) {
+        const d = ds[b];
+        if (d.t - ds[a].t > MADE.SPAN) break;
+        if (d.t - cur.t > 0 && d.t - cur.t <= MADE.GAP && dy(d) > dy(cur) && Math.abs(d.bx - cur.bx) <= MADE.STEP_X * cur.w) {
+          cur = d; n += 1;
+          if (dy(cur) >= MADE.END) { hit = ds[a]; steps = n; break; }
+        }
+      }
+    }
     sh.made = !!hit;
     sh.made_t = hit ? hit.t : null;
-    sh.confidence = hit && below.filter((b) => Math.abs(b.t - hit.t) <= 0.3).length >= 2 ? '보통' : '낮음';
+    sh.confidence = hit && steps >= 3 ? '보통' : '낮음';
   });
   return shots;
 }
@@ -453,7 +476,7 @@ class Analyzer {
     this.tracker.delete(); this.gray.delete(); this.motion.delete();
     const results = this.variants.map((v) => {
       v.ball.delete();
-      const kept = trackFilter(v.dets);
+      const kept = trackFilter(v.dets.filter((d) => !onRim(d)));
       return { params: v.params, shots: judgeMade(groupShots(kept), kept), ballFrames: kept.length, dets: this.debug ? v.dets : undefined };
     });
     const main = results[0];
@@ -493,5 +516,5 @@ class Analyzer {
   }
 }
 
-if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, SceneMotion, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
-if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, SceneMotion, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };
+if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, MADE, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
+if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, MADE, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };

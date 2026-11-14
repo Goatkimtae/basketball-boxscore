@@ -1,0 +1,20 @@
+{
+ "video": "20261114_H vs N_1_l.mp4 (8 min 22 s, 1472x720 H.264 13 Mbps, fixed camera, left hoop only)",
+ "rim_768": [
+  67,
+  151
+ ],
+ "checked": "Every shot the detector reported was looked at on 5 fps close-ups of the hoop. Shots it did not report were looked for only in the first 122 s.",
+ "before_rim_rules": {
+  "shots": 50,
+  "made": 19,
+  "first_122s": "5 real shots found, 10 false (the orange rim itself), 5 made of which 2 real"
+ },
+ "after_rim_rules": {
+  "shots": 22,
+  "made": 9,
+  "real_shots": "about 19-20 of 22 (2-3 unclear)",
+  "made_check": "3 clearly right (18.1, 101.7, 310.5), 2 look wrong (206.9, 288.1), 4 unclear (37.1, 155.8, 420.2, 469.6)",
+  "first_122s": "5/5 real shots found, 0 false; misses at 39.3, 65.3, 97.3 now judged missed"
+ }
+}
