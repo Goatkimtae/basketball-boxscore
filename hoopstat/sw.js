@@ -1,6 +1,6 @@
 /* Offline cache for the app shell and the analysis libraries. Bump VERSION on every release. */
-const VERSION = 'hoopstat-v4';
-const FILES = ['./', 'index.html', 'style.css', 'app.js', 'stats.js', 'flow.js', 'export.js', 'engine.js', 'worker.js', '사용법.html',
+const VERSION = 'hoopstat-v5';
+const FILES = ['./', 'index.html', 'style.css', 'app.js', 'stats.js', 'flow.js', 'sync.js', 'export.js', 'engine.js', 'demux.js', 'worker.js', '사용법.html',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png',
   'vendor/opencv.js', 'vendor/mp4box.all.min.js', 'vendor/xlsx.full.min.js'];
 self.addEventListener('install', (e) => {

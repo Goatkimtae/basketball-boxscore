@@ -1,17 +1,25 @@
-/* Play flow: from the shots, the camera direction, the scene motion and the whistles, work out what
-   happened between the shots. Who got each rebound, when the ball changed hands without a shot
-   (turnover), which whistles stopped play (fouls), and which shots were free throws.
-   Pure functions on the analysis result; no video access.
+/* Play flow: what happened between the shots.
 
-   The camera follows the ball, so the hoop it shows tells which end the play is at. The order of
-   shots tells who had the ball: after a miss, if the same team shoots again at the same end before
-   the camera goes to the other end, they got the offensive rebound; if the other team shoots next,
-   it was a defensive rebound. If a team gets the ball but the next shot is by the other team, the
-   ball was lost without a shot: a turnover.
+   infer(result, settings)  - once after the analysis: shots -> field goals, whistles that stopped play
+                              -> fouls, still shots after a foul -> free throws; then derive().
+   derive(events, settings, ctx) - any time the record changes: rebuilds the rebounds and turnovers from
+                              the shots as they are now (after the user confirmed made / missed, deleted
+                              a false shot, added a foul ...). Pure functions; no video access.
 
-   A whistle-like sound counts only if play stops after it (players nearly still for a few seconds).
-   A free throw is the first shot at the same hoop after such a whistle, taken while the players
-   stand still. Team rule: one free throw per shooting foul. */
+   Three ways of filming (ctx.mode):
+     'pan'  one camera that follows the ball: the hoop it shows tells which end the play is at
+     'two'  one fixed camera per hoop: both hoops are covered, but nothing shows the ball changing ends
+     'one'  one fixed camera on one hoop: the other team's shots are not seen at all
+
+   Rebound: after a miss, if the same team shoots again at that hoop soon (pan: before the camera goes
+   to the other end; fixed cameras: within 10 s) it was an offensive rebound, otherwise defensive.
+   Turnover: a team has the ball but the next shot is the other team's (not in 'one' mode).
+   Foul ('pan' only): a whistle-like sound after which play stops (players nearly still for a few seconds).
+   Free throw ('pan' only): the first shot at the same hoop within 40 s of a foul, taken while players stand still.
+   With fixed cameras players walk through the picture after a whistle, so the stoppage test does not
+   work (checked on one game: none of about nine whistles passed). There the whistle-like sounds of
+   0.5 s or more are only listed ('휘슬') for the user to judge in the quick review.
+   Team rule: one free throw per shooting foul. */
 'use strict';
 (function (root) {
   const Stats = root.Stats || (typeof require !== 'undefined' ? require('./stats.js') : null);
@@ -21,19 +29,23 @@
     SEG_GAP: 0.6,       // the camera may lose the hoop this long within one look at an end
     SEG_MIN: 1.0,       // shorter looks are ignored
     FLIP_MIN: 2.0,      // this many seconds on the other end means the ball went there
-    CONFLICT: 2.5,      // two shots at opposite ends closer than this cannot both be real
+    CONFLICT: 2.5,      // pan camera: two shots at opposite ends closer than this cannot both be real
     REB_DT: 0.3,        // rebound: this long after the ball was last seen at the rim
+    OREB_GAP: 10,       // fixed cameras: the same team shooting again within this many seconds kept the ball
     // a whistle stopped play: scene motion (share of the median) 1-5 s and 1-12 s after it
     STOP_1_5: 0.7, STOP_1_12: 0.85,
     FOUL_BEFORE: 3.0,   // a fouled shot reaches the rim up to this long before the whistle
     FOUL_AFTER: 1.5,    // ... or this long after it
     ON_SHOT: 2.5,       // a whistle this soon after a missed shot ends play on that shot (no rebound)
+    DEAD_AFTER: 4.0,    // derive(): a foul recorded within this long after a missed shot means no rebound
     FT_MIN: 4, FT_MAX: 40,       // the free throw comes this long after the whistle
     FT_STILL: 0.4,      // players stand still before a free throw: motion 3-0.7 s before it, share of median
-    OREB_GAP: 8,        // one-hoop video: the same team shooting again within this many seconds kept the ball
+    MARK_DUR: 0.5,      // fixed cameras: whistle-like sounds this long are listed for the user to judge
   };
   const r1 = (x) => Math.round(x * 10) / 10;
+  const isShot = (e) => e.type === '야투' || e.type === '자유투';
 
+  /* ------------------------------------------------------------ camera direction and motion */
   /** camera track [[t, side 0/1/2, x, motion x1000 or -1], ...] -> looks at one end [{side, start, end}] */
   function segments(track) {
     const segs = [];
@@ -52,10 +64,15 @@
     for (const g of segs) if (g.side === side) s += Math.max(0, Math.min(g.end, t2) - Math.max(g.start, t1));
     return s;
   }
+  /** the end the camera shows most in [t1, t2], or null */
+  function sideAt(segs, t1, t2) {
+    const l = timeOn(segs, '왼쪽', t1, t2), r = timeOn(segs, '오른쪽', t1, t2);
+    return l === r ? null : l > r ? '왼쪽' : '오른쪽';
+  }
 
-  /** Scene motion over time, relative to the video's median. Returns null when the track has none. */
-  function motionOf(track) {
-    const pts = (track || []).filter((r) => r.length > 3 && r[3] >= 0).map((r) => [r[0], r[3]]);
+  /** Scene motion over time, relative to the video's median; shift moves the track onto the game clock. */
+  function motionOf(track, shift = 0) {
+    const pts = (track || []).filter((r) => r.length > 3 && r[3] >= 0).map((r) => [r[0] + shift, r[3]]);
     if (pts.length < 20) return null;
     const sorted = pts.map((p) => p[1]).sort((a, b) => a - b);
     const med = sorted[sorted.length >> 1] || 1e-6;
@@ -69,14 +86,14 @@
     };
   }
 
-  /** Did play stop after this whistle? */
-  function stopped(mo, w) {
-    if (!mo) return false;
-    const a = mo.mean(w.t + 1, w.t + 5), b = mo.mean(w.t + 1, w.t + 12);
-    return a != null && b != null && a < P.STOP_1_5 && b < P.STOP_1_12;
+  /** Did play stop after this whistle? Every camera that has a picture then must show it. */
+  function stopped(mos, w) {
+    const list = (Array.isArray(mos) ? mos : [mos]).filter(Boolean)
+      .map((mo) => [mo.mean(w.t + 1, w.t + 5), mo.mean(w.t + 1, w.t + 12)]).filter(([a, b]) => a != null && b != null);
+    return list.length > 0 && list.every(([a, b]) => a < P.STOP_1_5 && b < P.STOP_1_12);
   }
 
-  /** Two shots at opposite ends within 2.5 s: keep the one at the end the camera settles on. */
+  /** Pan camera: two shots at opposite ends within 2.5 s: keep the one at the end the camera settles on. */
   function dropConflicts(shots, segs) {
     const out = [...shots].sort((a, b) => a.start - b.start), dropped = [];
     for (let i = 0; i + 1 < out.length; i++) {
@@ -93,161 +110,198 @@
     return { kept: out, dropped };
   }
 
-  /** the end the camera shows most in [t1, t2], or null */
-  function sideAt(segs, t1, t2) {
-    const l = timeOn(segs, '왼쪽', t1, t2), r = timeOn(segs, '오른쪽', t1, t2);
-    return l === r ? null : l > r ? '왼쪽' : '오른쪽';
-  }
+  /* ------------------------------------------------------------ rebounds and turnovers */
+  function possession(base, s, ctx) {
+    const mode = (ctx && ctx.mode) || 'pan', segs = (ctx && ctx.segs) || [];
+    const teams = [s.team_left || '팀 A', s.team_right || '팀 B'];
+    const other = (t) => (t === teams[0] ? teams[1] : teams[0]);
+    const sideOf = (team, t) => (Stats.teamFor('왼쪽', t, s) === team ? '왼쪽' : '오른쪽');
+    const shots = base.filter(isShot);
+    const out = [], timeline = [];
+    const add = (o) => out.push({ player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', derived: true, ...o, time: r1(o.time) });
+    const endOf = (e) => (e.end != null && e.end >= e.time && e.end <= e.time + 6 ? e.end : e.time + 1);
+    let poss = null, since = null;
+    const have = (team, t) => { poss = team; since = t; timeline.push([t, team]); };
 
-  /** Shooting fouls: a whistle that stopped play, then the first shot at the same hoop within 40 s,
-      taken while the players stand still. The fouled shot itself is optional (it is often not seen). */
-  function freeThrowTrips(shots, fouls, segs, mo) {
-    const used = new Set(), trips = [];
-    if (!mo) return { trips, used };
-    for (const w of fouls) {
-      const near = shots.filter((sh) => !used.has(sh) && sh.start >= w.t - P.FOUL_BEFORE && sh.start <= w.t + P.FOUL_AFTER);
-      const fg = near[near.length - 1] || null;
-      const side = fg ? fg.side : sideAt(segs, w.t - 1, w.t + 3);
-      if (!side) continue;
-      const ft = shots.find((sh) => !used.has(sh) && sh !== fg && sh.start > w.t + P.FT_MIN);
-      if (!ft || ft.side !== side || ft.start - w.t > P.FT_MAX) continue;
-      if (timeOn(segs, OTHER_SIDE[side], w.t, ft.start) >= P.FLIP_MIN) continue;
-      const still = mo.mean(ft.start - 3, ft.start - 0.7);
-      if (still == null || still >= P.FT_STILL) continue;
-      for (const s of fg ? [fg, ft] : [ft]) used.add(s);
-      trips.push({ w, fg, fts: [ft], still });
+    function turnover(team, e) {
+      let t;
+      if (mode === 'pan') {
+        // about when the camera turns back toward the end where the next shot happens
+        const side = e.side || sideOf(e.team, e.time);
+        const seg = segs.find((g) => g.side === side && g.start > since && g.start < e.time);
+        t = seg ? Math.max(since + 1, seg.start - 2) : (since + e.time) / 2;
+      } else {
+        t = Math.max(since + 1, e.time - 5);
+      }
+      t = Math.max(Math.min(t, e.time - 1), since);
+      add({ time: t, team, type: '턴오버', side: sideOf(team, t),
+        note: `${since.toFixed(1)}초에 공을 가졌는데 다음 슛(${Number(e.time).toFixed(1)}초)은 상대 팀 → 슛 없이 공을 잃음(턴오버). 시각은 추정.`
+          + (mode === 'two' ? ' 앱이 이 팀의 슛을 놓쳤을 수도 있으니 장면 보기로 확인.' : ' 스틸이었는지는 장면 보기로 확인.') });
     }
-    return { trips, used };
+
+    function rebound(e, team, next) {
+      const opp = other(team), side = e.side || sideOf(team, e.time), away = OTHER_SIDE[side], end = endOf(e);
+      let t = end + P.REB_DT;
+      if (next) t = Math.min(t, Math.max(end, next.time - 0.3));
+      const o = { time: t, type: '리바운드', side };
+      if (!next) {
+        const flip = mode === 'pan' && timeOn(segs, away, end, Infinity) >= P.FLIP_MIN;
+        return { ...o, team: opp, detail: '수비', confidence: flip ? '보통' : '낮음',
+          note: flip ? '이후 카메라가 반대쪽 골대로 감 → 수비 리바운드' : '이후 슛이 없어 근거가 약함 → 더 흔한 수비 리바운드로 추정' };
+      }
+      const nt = Number(next.time).toFixed(1), gap = next.time - end;
+      if (next.team !== team) {
+        return { ...o, team: opp, detail: '수비', confidence: '보통', note: `다음 슛(${nt}초)은 상대 팀 → 수비 리바운드` };
+      }
+      if (mode === 'pan') {
+        if (timeOn(segs, away, end, next.time) < P.FLIP_MIN) {
+          return { ...o, team, detail: '공격', confidence: gap <= 10 ? '보통' : '낮음', note: `다음 슛(${nt}초)도 같은 팀이 같은 골대에서 던짐 → 공격 리바운드` };
+        }
+        return { ...o, team: opp, detail: '수비', note: '카메라가 반대쪽 골대로 갔다가 돌아옴 → 상대가 잡았다가 다시 공을 잃은 것으로 추정' };
+      }
+      if (gap <= P.OREB_GAP) {
+        return { ...o, team, detail: '공격', confidence: '보통', note: `${Math.round(gap)}초 뒤(${nt}초) 같은 팀이 같은 골대에서 다시 던짐 → 공격 리바운드` };
+      }
+      return { ...o, team: opp, detail: '수비',
+        note: `같은 팀의 다음 슛까지 ${Math.round(gap)}초 → 상대가 잡아 반대쪽으로 갔다 온 것으로 추정(고정 카메라라 공의 이동은 보이지 않음)` };
+    }
+
+    for (const e of base) {
+      const T = e.team;
+      if (!T) continue;
+      if (isShot(e)) {
+        if (e.type === '야투' && poss && T !== poss && mode !== 'one') turnover(poss, e);
+        if (e.result === '성공') { have(other(T), e.time + 1); continue; }
+        const next = shots[shots.indexOf(e) + 1] || null, tNext = next ? next.time : Infinity;
+        // a foul right after the miss: dead ball, no rebound (the foul event sets who has the ball)
+        if (base.some((f) => f.type === '파울' && f.time >= e.time - 0.5 && f.time <= Math.min(endOf(e) + P.DEAD_AFTER - 1, tNext))) { have(T, e.time); continue; }
+        // a rebound the user entered for this miss stands
+        if (base.some((f) => f.type === '리바운드' && f.time >= e.time - 0.2 && f.time < tNext && f !== e)) continue;
+        const reb = rebound(e, T, next);
+        add(reb);
+        have(reb.team, reb.time);
+      } else if (e.type === '파울' || e.type === '턴오버') have(other(T), e.time);
+      else if (e.type === '리바운드' || e.type === '스틸') have(T, e.time);
+    }
+    return { derived: out, timeline };
   }
 
+  /** Rebuild the automatic rebounds and turnovers; everything else is kept as it is. */
+  function derive(events, s, ctx) {
+    const isOld = (e) => e.derived && e.source === '자동';
+    const old = events.filter(isOld);
+    const base = events.filter((e) => !isOld(e)).sort((a, b) => a.time - b.time);
+    const { derived } = possession(base, s, ctx);
+    // keep the id and the jersey number of a rebound / turnover that is still there
+    for (const d of derived) {
+      const k = old.findIndex((o) => o.type === d.type && o.team === d.team && Math.abs(o.time - d.time) <= 1.5);
+      if (k < 0) continue;
+      const o = old.splice(k, 1)[0];
+      if (o.id) d.id = o.id;
+      if ((o.player || '').trim()) d.player = o.player;
+    }
+    return [...base, ...derived].sort((a, b) => a.time - b.time);
+  }
+
+  /* ------------------------------------------------------------ after the analysis */
   function infer(result, s) {
     const teams = [s.team_left || '팀 A', s.team_right || '팀 B'];
     const other = (t) => (t === teams[0] ? teams[1] : teams[0]);
     const teamOf = (side, t) => Stats.teamFor(side, t, s);
-    const segs = segments(result.track);
-    // a fixed camera that films one half never shows the other hoop, so it cannot tell where the ball went
+    const cams = result.cams && result.cams.length ? result.cams : [{ id: 'A', side: null, track: result.track, offset: 0 }];
+    const two = cams.length >= 2;
+    const segs = two ? [] : segments(cams[0].track);
     const seen = ['왼쪽', '오른쪽'].filter((sd) => timeOn(segs, sd, -Infinity, Infinity) >= P.FLIP_MIN);
-    const oneHoop = seen.length === 1;
-    const mo = motionOf(result.track);
-    const { kept, dropped } = dropConflicts(result.shots || [], segs);
-    const whistles = [...(result.whistles || [])].sort((a, b) => a.t - b.t);
-    const fouls = whistles.filter((w) => stopped(mo, w));
-    const { trips, used } = freeThrowTrips(kept, fouls, segs, mo);
-    const done = new Set(trips.map((tr) => tr.w));     // whistles already turned into records
+    const mode = two ? 'two' : seen.length === 1 ? 'one' : 'pan';
+    const ctx = { mode, segs: segs.map((g) => ({ side: g.side, start: r1(g.start), end: r1(g.end) })) };
+    const mos = cams.map((c) => ({ side: c.side, mo: motionOf(c.track, c.offset || 0) })).filter((x) => x.mo);
+    const moFor = (side) => (two ? (mos.find((x) => x.side === side) || {}).mo || null : mos.length ? mos[0].mo : null);
 
-    const plays = [];
-    for (const sh of kept) if (!used.has(sh)) plays.push({ kind: 'FG', t: sh.start, side: sh.side, shot: sh });
-    for (const tr of trips) plays.push({ kind: 'TRIP', t: Math.min(tr.fg ? tr.fg.start : Infinity, tr.w.t), side: tr.fts[0].side, trip: tr });
-    plays.sort((a, b) => a.t - b.t);
+    const all = [...(result.shots || [])].sort((a, b) => a.start - b.start);
+    const { kept, dropped } = mode === 'pan' ? dropConflicts(all, segs) : { kept: all, dropped: [] };
+    const whistles = [...(result.whistles || [])].sort((a, b) => a.t - b.t);
+    const fouls = mode === 'pan' ? whistles.filter((w) => stopped(mos.map((x) => x.mo), w)) : [];
+
+    // shooting fouls: a foul, then the first shot at the same hoop within 40 s, taken while players stand still
+    const used = new Set(), trips = [];
+    for (const w of fouls) {
+      const near = kept.filter((sh) => !used.has(sh) && sh.start >= w.t - P.FOUL_BEFORE && sh.start <= w.t + P.FOUL_AFTER);
+      const fg = near[near.length - 1] || null;
+      const ft = kept.find((sh) => !used.has(sh) && sh !== fg && sh.start > w.t + P.FT_MIN);
+      if (!ft || ft.start - w.t > P.FT_MAX) continue;
+      const side = fg ? fg.side : two ? ft.side : sideAt(segs, w.t - 1, w.t + 3);
+      if (!side || ft.side !== side) continue;
+      if (!two && timeOn(segs, OTHER_SIDE[side], w.t, ft.start) >= P.FLIP_MIN) continue;
+      const mo = moFor(side), still = mo ? mo.mean(ft.start - 3, ft.start - 0.7) : null;
+      if (still == null || still >= P.FT_STILL) continue;
+      for (const sh of fg ? [fg, ft] : [ft]) used.add(sh);
+      trips.push({ w, fg, ft, still });
+    }
+    const tripOf = new Map(trips.map((tr) => [tr.w, tr]));
 
     const ev = [];
-    const add = (o) => ev.push({ player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', ...o, time: r1(o.time) });
-    const fgEvent = (sh, team, extra = '') => add({
-      time: sh.start, team, type: '야투', detail: '2점', result: sh.made ? '성공' : '실패', confidence: sh.confidence, side: sh.side,
-      note: '공이 림 높이에 처음 보인 시각(슛을 던진 순간보다 0.3~1초 늦음)'
-        + (sh.made && sh.made_t != null ? `. 성공 근거: ${sh.made_t.toFixed(1)}초에 공이 림 가운데 아래로 지나감` : '') + extra,
-    });
+    const add = (o) => { const e = { player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', ...o, time: r1(o.time) }; ev.push(e); return e; };
     const whistleText = (w) => `${w.t.toFixed(1)}초 휘슬(${w.dur.toFixed(1)}초간) 뒤 선수들이 멈춤`;
-    function foulEvent(w, team, why) {
-      done.add(w);
-      add({ time: w.t, team, type: '파울', detail: '개인파울', confidence: '낮음',
-        note: `${whistleText(w)} → 파울로 판단. ${why} 공격자 파울이나 바이얼레이션이었으면 '수정'에서 바꾸세요.` });
-    }
-
-    function turnover(team, since, pl) {
-      // about when the camera turns back toward the end where the next shot happens
-      const seg = segs.find((g) => g.side === pl.side && g.start > since && g.start < pl.t);
-      let t = seg ? Math.max(since + 1, seg.start - 2) : (since + pl.t) / 2;
-      t = Math.min(t, pl.t - 1);
-      add({ time: Math.max(t, since), team, type: '턴오버', confidence: '낮음',
-        note: `${since.toFixed(1)}초에 공을 가졌는데 다음 슛(${pl.t.toFixed(1)}초)은 상대 팀 → 슛 없이 공을 잃음(턴오버). 시각은 추정. 스틸이었는지는 장면 보기로 확인.` });
-    }
-
-    function rebound(last, team, side, next) {
-      const opp = other(team), away = OTHER_SIDE[side];
-      let t = last.end + P.REB_DT;
-      if (next) t = Math.min(t, Math.max(last.end, next.t - 0.3));
-      if (next) {
-        const nextTeam = teamOf(next.side, next.t);
-        const flip = timeOn(segs, away, last.end, next.t) >= P.FLIP_MIN;
-        if (oneHoop && nextTeam === team && next.t - last.end > P.OREB_GAP) {
-          return { time: t, team: opp, type: '리바운드', detail: '수비', confidence: '낮음',
-            note: `한쪽 골대만 찍은 영상: 다음 슛까지 ${Math.round(next.t - last.end)}초라 상대가 잡아 반대쪽으로 갔다 온 것으로 추정 → 수비 리바운드` };
-        }
-        if (nextTeam === team && !flip) {
-          return { time: t, team, type: '리바운드', detail: '공격', confidence: next.t - last.end <= 10 ? '보통' : '낮음',
-            note: `다음 슛(${next.t.toFixed(1)}초)도 같은 팀이 같은 골대에서 던짐 → 공격 리바운드` };
-        }
-        if (nextTeam === team) {
-          return { time: t, team: opp, type: '리바운드', detail: '수비', confidence: '낮음',
-            note: '카메라가 반대쪽 골대로 갔다가 돌아옴 → 상대가 잡았다가 다시 공을 잃은 것으로 추정' };
-        }
-        return { time: t, team: opp, type: '리바운드', detail: '수비', confidence: '보통',
-          note: `다음 슛(${next.t.toFixed(1)}초)은 상대 팀 → 수비 리바운드` };
-      }
-      const flip = timeOn(segs, away, last.end, Infinity) >= P.FLIP_MIN;
-      return { time: t, team: opp, type: '리바운드', detail: '수비', confidence: flip ? '보통' : '낮음',
-        note: flip ? '이후 카메라가 반대쪽 골대로 감 → 수비 리바운드' : '이후 슛이 없어 근거가 약함 → 더 흔한 수비 리바운드로 추정' };
-    }
-
-    // fouls that stopped play between plays: on the team without the ball (the usual case)
-    let poss = null, since = null;
-    const foulsBetween = (t1, t2) => {
-      for (const w of fouls) {
-        if (done.has(w) || w.t < t1 || w.t >= t2) continue;
-        if (poss) foulEvent(w, other(poss), `그때 공을 가진 ${poss}의 상대 팀 파울로 봄.`);
-        else { done.add(w); add({ time: w.t, team: '', type: '휘슬', note: `${whistleText(w)}. 어느 팀 파울인지 정하지 못함. 장면을 보고 '수정'에서 파울로 바꾸세요.` }); }
-      }
-    };
-
-    plays.forEach((pl, i) => {
-      const team = teamOf(pl.side, pl.t);
-      foulsBetween(-Infinity, pl.t);
-      if (poss && team !== poss) turnover(poss, since, pl);
-      let last;
-      if (pl.kind === 'FG') {
-        fgEvent(pl.shot, team);
-        last = pl.shot;
-      } else {
-        const { w, fg, fts, still } = pl.trip;
-        const andOne = !!(fg && fg.made);
-        if (andOne) fgEvent(fg, team, '. 슛 직후 휘슬 → 앤드원');
-        add({ time: w.t, team: other(team), type: '파울', detail: '슈팅파울', confidence: '낮음',
-          note: `${whistleText(w)}, ${fts[0].start.toFixed(1)}초에 같은 골대에서 선수들이 선 채로 슛 1개 → 슈팅 파울과 자유투로 판단.`
-            + (fg ? (andOne ? ' 슛이 들어가 앤드원.' : ` ${fg.start.toFixed(1)}초의 실패한 슛은 야투 시도로 세지 않음(FIBA).`) : '') });
-        const detail = andOne ? '앤드원' : '2점슛 파울';
-        for (const ft of fts) {
-          add({ time: ft.start, team, type: '자유투', detail, result: ft.made ? '성공' : '실패', side: ft.side, confidence: '낮음',
-            note: `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 선수들이 서 있는 가운데 던진 슛(직전 움직임 ${Math.round(still * 100)}%) → 자유투. 팀 규칙: 자유투 1개`
-              + (andOne ? ', 앤드원은 성공 시 1점.' : ", 성공 시 2점. 3점슛을 던지다 당한 파울이면 세부를 '3점슛 파울'로 바꾸면 3점.") });
-        }
-        last = fts[fts.length - 1];
-      }
-      if (last.made) { poss = other(team); since = last.end; return; }
-      // a whistle right after a missed shot ends play on that shot: foul on the defence, no rebound
-      const onShot = fouls.find((w) => !done.has(w) && w.t >= last.end - 0.5 && w.t <= last.end + P.ON_SHOT);
-      if (onShot) {
-        foulEvent(onShot, other(team), `${last.start.toFixed(1)}초 슛 직후라 수비 팀(${other(team)}) 파울로 봄. 리바운드 없이 ${team} 공격 계속.`);
-        poss = team; since = onShot.t;
-        return;
-      }
-      const reb = rebound(last, team, pl.side, plays[i + 1] || null);
-      add(reb);
-      poss = reb.team; since = reb.time;
+    const fgEvent = (sh, extra = '') => add({
+      time: sh.start, end: r1(sh.end), team: teamOf(sh.side, sh.start), type: '야투', detail: '2점', result: sh.made ? '성공' : '실패',
+      confidence: sh.confidence, side: sh.side, cam: sh.cam,
+      note: '공이 림 높이에 처음 보인 시각(슛을 던진 순간보다 0.3~1초 늦음)'
+        + (sh.made && sh.made_t != null ? `. 성공 근거: ${sh.made_t.toFixed(1)}초에 공이 그물 안으로 떨어짐` : '') + extra,
     });
-    foulsBetween(-Infinity, Infinity);
+    for (const sh of kept) if (!used.has(sh)) fgEvent(sh);
+    for (const { w, fg, ft, still } of trips) {
+      const team = teamOf(ft.side, ft.start), andOne = !!(fg && fg.made);
+      if (andOne) fgEvent(fg, '. 슛 직후 휘슬 → 앤드원');
+      add({ time: w.t, team: other(team), type: '파울', detail: '슈팅파울', side: ft.side, cam: ft.cam,
+        note: `${whistleText(w)}, ${ft.start.toFixed(1)}초에 같은 골대에서 선수들이 선 채로 슛 1개 → 슈팅 파울과 자유투로 판단.`
+          + (fg ? (andOne ? ' 슛이 들어가 앤드원.' : ` ${fg.start.toFixed(1)}초의 실패한 슛은 야투 시도로 세지 않음(FIBA).`) : '') });
+      const detail = andOne ? '앤드원' : '2점슛 파울';
+      add({ time: ft.start, end: r1(ft.end), team, type: '자유투', detail, result: ft.made ? '성공' : '실패', side: ft.side, cam: ft.cam,
+        note: `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 선수들이 서 있는 가운데 던진 슛(직전 움직임 ${Math.round(still * 100)}%) → 자유투. 팀 규칙: 자유투 1개`
+          + (andOne ? ', 앤드원은 성공 시 1점.' : ", 성공 시 2점. 3점슛을 던지다 당한 파울이면 세부를 '3점슛 파울'로 바꾸면 3점.") });
+    }
 
+    // the other fouls: on the team without the ball (the usual case); right after a missed shot, on that shot's defence
     ev.sort((a, b) => a.time - b.time);
-    const n = (type, f = () => true) => ev.filter((e) => e.type === type && f(e)).length;
+    const { timeline } = possession(ev, s, ctx);
+    const possAt = (t) => { let p = null; for (const [tt, team] of timeline) { if (tt <= t) p = team; else break; } return p; };
+    const fgs = ev.filter((e) => e.type === '야투');
+    for (const w of fouls) {
+      if (tripOf.has(w)) continue;
+      const onShot = fgs.find((e) => e.result !== '성공' && w.t >= e.end - 0.5 && w.t <= e.end + P.ON_SHOT);
+      if (onShot) {
+        add({ time: w.t, team: other(onShot.team), type: '파울', detail: '개인파울', side: onShot.side, cam: onShot.cam,
+          note: `${whistleText(w)} → 파울로 판단. ${Number(onShot.time).toFixed(1)}초 슛 직후라 수비 팀(${other(onShot.team)}) 파울로 봄. 리바운드 없이 ${onShot.team} 공격 계속. 공격자 파울이나 바이얼레이션이었으면 '수정'에서 바꾸세요.` });
+        continue;
+      }
+      const p = possAt(w.t);
+      if (p) {
+        add({ time: w.t, team: other(p), type: '파울', detail: '개인파울',
+          note: `${whistleText(w)} → 파울로 판단. 그때 공을 가진 ${p}의 상대 팀 파울로 봄. 공격자 파울이나 바이얼레이션이었으면 '수정'에서 바꾸세요.` });
+      } else {
+        add({ time: w.t, team: '', type: '휘슬', note: `${whistleText(w)}. 어느 팀 파울인지 정하지 못함. 장면을 보고 '수정'에서 파울로 바꾸세요.` });
+      }
+    }
+
+    if (mode !== 'pan') {
+      for (const w of whistles) {
+        if (w.dur < P.MARK_DUR) continue;
+        add({ time: w.t, team: '', type: '휘슬',
+          note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz). 고정 카메라 영상에서는 파울인지 자동으로 가리지 못합니다. 빠른 검토에서 파울이면 팀을 고르고, 아니면 지우세요.` });
+      }
+    }
+
+    const events = derive(ev, s, ctx);
+    const n = (type, f = () => true) => events.filter((e) => e.type === type && f(e)).length;
     return {
-      events: ev,
+      events, ctx,
       summary: { fg: n('야투'), made: n('야투', (e) => e.result === '성공'), ft: n('자유투'), reb: n('리바운드'), oreb: n('리바운드', (e) => e.detail === '공격'),
         to: n('턴오버'), pf: n('파울'), whistles: whistles.length, fouls: fouls.length, unknownWhistles: n('휘슬'), dropped: dropped.length,
-        motion: !!mo },
+        motion: mos.length > 0, mode },
     };
   }
 
-  const Flow = { P, segments, timeOn, motionOf, stopped, dropConflicts, freeThrowTrips, infer };
+  const Flow = { P, segments, timeOn, motionOf, stopped, dropConflicts, possession, derive, infer };
   if (typeof window !== 'undefined') window.Flow = Flow;
   if (typeof module !== 'undefined') module.exports = Flow;
 })(typeof window !== 'undefined' ? window : globalThis);

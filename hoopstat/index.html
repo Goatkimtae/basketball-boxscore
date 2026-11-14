@@ -28,10 +28,32 @@
   <section class="card" id="step1">
     <h2><span class="num">1</span>영상과 설정</h2>
     <div class="form">
-      <label for="videoInput">경기 영상</label>
+      <label for="cam_mode">촬영 방식</label>
+      <div class="row">
+        <select id="cam_mode">
+          <option value="pan">카메라 1대 (한 영상)</option>
+          <option value="two">골대마다 고정 카메라 1대씩 (두 영상)</option>
+        </select>
+        <span class="muted">고정 카메라 2대가 가장 정확합니다. 휴대폰 원본 화질(720p 이상)을 그대로 쓰세요.</span>
+      </div>
+
+      <label for="videoInput" id="videoLabel">경기 영상</label>
       <div class="row">
         <input type="file" id="videoInput" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v">
         <span id="videoInfo" class="muted"></span>
+      </div>
+
+      <label for="videoInputB" class="two-only">오른쪽 골대 영상</label>
+      <div class="row two-only">
+        <input type="file" id="videoInputB" accept="video/mp4,video/quicktime,.mp4,.mov,.m4v">
+        <span id="videoInfoB" class="muted"></span>
+      </div>
+
+      <label for="cam_offset" class="two-only">두 영상 시작 차이</label>
+      <div class="row two-only">
+        <input id="cam_offset" inputmode="decimal" size="8" placeholder="자동">
+        <span class="muted">초. 오른쪽 영상이 늦게 시작했으면 +, 먼저 시작했으면 −. 분석할 때 소리로 자동으로 맞춥니다.</span>
+        <span id="syncInfo" class="muted"></span>
       </div>
 
       <label for="profileSel">체육관 설정</label>
@@ -88,15 +110,16 @@
 
   <section class="card" id="step3">
     <h2><span class="num">3</span>검토와 수정</h2>
-    <p class="muted">자동 기록: 야투(성공/실패), 리바운드(공격/수비), 턴오버, 파울(휘슬 뒤 경기가 멈춘 때), 자유투. 어시스트·스틸·블록·3점은 자동이 아니니 '사건 추가'나 '수정'으로 넣으세요.
-      등번호는 영상 화질로는 읽을 수 없어서 <b>등번호 넣기</b>로 장면을 보며 번호 버튼을 누르면 개인 기록이 채워집니다.</p>
+    <p class="muted">자동으로 찾는 것: 슛 시도와 성공/실패, 리바운드(공격/수비), 턴오버, 파울(휘슬 뒤 경기가 멈춘 때), 자유투.
+      <b>빠른 검토</b>를 누르면 슛 장면이 차례로 재생됩니다. 성공/실패가 틀렸으면 고치고 등번호 버튼을 누르세요. 고치는 대로 리바운드·턴오버가 다시 계산됩니다.
+      어시스트·스틸·블록·3점은 '사건 추가'나 '수정'으로 넣습니다.</p>
     <div class="tabs" role="tablist">
       <button role="tab" id="tabEvents" aria-selected="true" aria-controls="paneEvents">사건 기록</button>
       <button role="tab" id="tabBox" aria-selected="false" aria-controls="paneBox">박스스코어</button>
     </div>
     <div id="paneEvents" role="tabpanel" aria-labelledby="tabEvents">
       <div class="toolbar">
-        <button id="numBtn" class="primary">등번호 넣기</button>
+        <button id="numBtn" class="primary">빠른 검토(성공·실패·등번호)</button>
         <button id="sceneBtn">장면 보기</button>
         <button id="editBtn">수정…</button>
         <button id="addBtn">사건 추가…</button>
@@ -147,7 +170,7 @@
     <h3 id="profileTitle">체육관 설정: 골대 표시</h3>
     <ol class="muted small">
       <li>아래 막대로 <b>왼쪽 골대</b>가 보이는 장면을 찾고, 림(고리) 한가운데를 누르세요.</li>
-      <li>'오른쪽 골대'를 고르고 같은 방법으로 오른쪽 골대 림을 누르세요. 한쪽 골대만 찍은 영상(고정 카메라)이면 보이는 골대 하나만 표시해도 됩니다.</li>
+      <li>'오른쪽 골대'를 고르고 같은 방법으로 오른쪽 골대 림을 누르세요. 카메라 2대면 오른쪽 골대 영상이 나옵니다. 한쪽 골대만 찍은 영상이면 보이는 골대 하나만 표시해도 됩니다.</li>
       <li>이름을 정하고 저장하면, 같은 체육관 영상은 다음부터 바로 분석합니다.</li>
     </ol>
     <canvas id="pfCanvas" class="frame" width="768" height="432"></canvas>
@@ -200,9 +223,27 @@
   <form method="dialog" class="dlg">
     <h3 id="sceneTitle">장면 보기</h3>
     <div id="numBar" class="numbar" hidden>
-      <div class="row"><b id="numAsk">이 기록의 선수 등번호</b><span id="numLeft" class="muted"></span></div>
+      <div class="row" id="resBar">
+        <b>이 슛은</b>
+        <button type="button" id="resMade" aria-pressed="false">성공</button>
+        <button type="button" id="resMiss" aria-pressed="false">실패</button>
+        <span class="sep"></span>
+        <button type="button" id="kind2" aria-pressed="false">2점</button>
+        <button type="button" id="kind3" aria-pressed="false">3점</button>
+        <button type="button" id="kindFt" aria-pressed="false">자유투</button>
+        <span class="sep"></span>
+        <button type="button" id="resNot" class="ghost danger">슛 아님(지우기)</button>
+        <span class="muted">자동 판정이 틀렸으면 고치세요. 리바운드는 따라서 다시 계산됩니다.</span>
+      </div>
+      <div class="row" id="whBar" hidden>
+        <b>휘슬 소리 — 파울인가요?</b>
+        <button type="button" id="whA"></button>
+        <button type="button" id="whB"></button>
+        <button type="button" id="whNot" class="ghost danger">파울 아님(지우기)</button>
+      </div>
+      <div class="row" id="numRow"><b id="numAsk">이 기록의 선수 등번호</b><span id="numLeft" class="muted"></span></div>
       <div id="numButtons" class="row"></div>
-      <div class="row">
+      <div class="row" id="numTools">
         <input id="numInput" size="5" inputmode="numeric" placeholder="번호" aria-label="등번호 직접 입력">
         <button type="button" id="numEnter">넣기</button>
         <button type="button" id="numUnknown" class="ghost">모름(미상)</button>
@@ -213,6 +254,7 @@
     <video id="sceneVideo" controls muted playsinline class="frame"></video>
     <div class="row">
       <button type="button" id="sceneReplay">이 장면 2초 전부터 다시 재생</button>
+      <button type="button" id="sceneCam" class="ghost" hidden>다른 카메라로 보기</button>
       <span class="muted">아래는 기록 시각 기준 −1초부터 0.5초 간격 장면입니다.</span>
     </div>
     <div id="sceneGrid" class="scene-grid"></div>
@@ -221,10 +263,12 @@
 </dialog>
 
 <video id="vid" muted playsinline preload="auto" hidden></video>
+<video id="vidB" muted playsinline preload="auto" hidden></video>
 
 <script src="vendor/xlsx.full.min.js" defer></script>
 <script src="stats.js"></script>
 <script src="flow.js"></script>
+<script src="sync.js"></script>
 <script src="export.js"></script>
 <script src="app.js"></script>
 </body>

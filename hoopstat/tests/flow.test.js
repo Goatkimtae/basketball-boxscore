@@ -53,14 +53,14 @@ test('whistle at a missed shot, play stops, one still shot at the same hoop: sho
 });
 
 test('the fouled shot need not be seen: whistle, stoppage, then a still shot is still a free throw', () => {
-  const r = Flow.infer({ shots: [shot(60, '오른쪽')], track: track([['R', 30, 70]], 70, [[37, 60, 10]]), whistles: [whistle(36)] }, S);
+  const r = Flow.infer({ shots: [shot(60, '오른쪽')], track: track([['L', 0, 10], ['R', 30, 70]], 70, [[37, 60, 10]]), whistles: [whistle(36)] }, S);
   assert.deepStrictEqual(brief(r).slice(0, 2), ['36|빨강|파울|슈팅파울|', '60|남색|자유투|2점슛 파울|실패']);
 });
 
 test('team rule: only one free throw per foul; a later shot at the same hoop is a field goal', () => {
   // missed free throw at 60, offensive rebound, put-back at 64
   const r = Flow.infer({ shots: [shot(40, '오른쪽'), shot(60, '오른쪽'), shot(64, '오른쪽', true)],
-    track: track([['R', 30, 80]], 80, [[41, 60, 12]]), whistles: [whistle(40.5)] }, S);
+    track: track([['L', 0, 10], ['R', 30, 80]], 80, [[41, 60, 12]]), whistles: [whistle(40.5)] }, S);
   assert.deepStrictEqual(brief(r), ['40.5|빨강|파울|슈팅파울|', '60|남색|자유투|2점슛 파울|실패', '61.3|남색|리바운드|공격|', '64|남색|야투|2점|성공']);
 });
 
@@ -73,7 +73,7 @@ test('a free throw for a 3-point foul counts 3 points when made', () => {
 });
 
 test('made shot with a whistle: and-one, one free throw worth 1', () => {
-  const r = Flow.infer({ shots: [shot(40, '왼쪽', true), shot(55, '왼쪽', true)], track: track([['L', 30, 60]], 60, [[41.5, 55, 10]]),
+  const r = Flow.infer({ shots: [shot(40, '왼쪽', true), shot(55, '왼쪽', true)], track: track([['R', 0, 10], ['L', 30, 60]], 60, [[41.5, 55, 10]]),
     whistles: [whistle(40.9)] }, S);
   assert.deepStrictEqual(brief(r), ['40|빨강|야투|2점|성공', '40.9|남색|파울|슈팅파울|', '55|빨강|자유투|앤드원|성공']);
   assert.strictEqual(box(r)['빨강'].PTS, 3);
@@ -101,10 +101,12 @@ test('a stoppage whistle right after a missed shot: foul on the defence, no rebo
   assert.ok(!r.events.some((e) => e.type === '리바운드' && e.time < 100), 'no rebound after the fouled shot');
 });
 
-test('one-hoop video (fixed camera): a quick second shot is an offensive rebound, a late one a defensive rebound', () => {
+test('one-hoop video (fixed camera): quick second shot = offensive rebound, late one = defensive; no turnovers guessed', () => {
   const r = Flow.infer({ shots: [shot(10, '왼쪽'), shot(14, '왼쪽'), shot(40, '왼쪽')], track: track([['L', 0, 60]], 60) }, S);
+  assert.strictEqual(r.summary.mode, 'one');
   assert.deepStrictEqual(r.events.filter((e) => e.type === '리바운드').map((e) => [e.team, e.detail]),
     [['빨강', '공격'], ['남색', '수비'], ['남색', '수비']]);
+  assert.strictEqual(r.summary.to, 0, 'the other hoop is not seen, so a lost ball cannot be told from a shot there');
 });
 
 test('re-analysis keeps jersey numbers typed on automatic records', () => {

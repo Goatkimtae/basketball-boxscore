@@ -91,19 +91,19 @@ function checks(events) {
   if (missed + lastFtMissed !== reb) {
     msgs.push(`실패한 슛(야투 ${missed}개 + 마지막 자유투 ${lastFtMissed}개)과 리바운드 ${reb}개의 수가 다릅니다. 보통은 같습니다(쿼터 종료 직전 등은 예외).`);
   }
-  const auto = events.filter((e) => e.source === '자동' && e.type === '야투').length;
-  if (auto) msgs.push(`자동으로 찾은 야투 ${auto}개는 모두 2점으로 기록했습니다. 3점슛은 '수정'에서 바꿔 주세요.`);
+  const unchecked = events.filter((e) => e.source === '자동' && (e.type === '야투' || e.type === '자유투') && !e.checked).length;
+  if (unchecked) msgs.push(`아직 확인하지 않은 자동 슛이 ${unchecked}개 있습니다. 자동 슛은 모두 2점 야투로 기록되니, '빠른 검토'에서 성공/실패를 확인하고 3점슛·자유투는 버튼으로 바꿔 주세요.`);
   const autoFt = events.filter((e) => e.source === '자동' && e.type === '자유투' && e.detail === '2점슛 파울').length;
   if (autoFt) msgs.push(`자동으로 찾은 자유투 ${autoFt}개는 2점슛 파울(성공 시 2점)로 기록했습니다. 3점슛을 던지다 파울을 당했으면 세부를 '3점슛 파울'로 바꿔 주세요(성공 시 3점).`);
   const made = events.filter((e) => e.type === '야투' && e.result === '성공').length;
   const ast = events.filter((e) => e.type === '어시스트').length;
   if (made && !ast) msgs.push(`성공한 야투 ${made}개 중 어시스트가 있었는지는 자동으로 판정하지 않습니다. 장면을 보고 '사건 추가'로 넣어 주세요.`);
   const wh = events.filter((e) => e.type === '휘슬').length;
-  if (wh) msgs.push(`어느 팀 파울인지 정하지 못한 휘슬 ${wh}개가 있습니다. 장면을 보고 '수정'에서 파울로 바꿔 주세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
+  if (wh) msgs.push(`확인할 휘슬 소리 ${wh}개가 있습니다. '빠른 검토'에서 파울이면 파울한 팀을 고르고, 아니면 지워 주세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
   const autoPf = events.filter((e) => e.source === '자동' && e.type === '파울').length;
   if (autoPf) msgs.push(`자동으로 찾은 파울 ${autoPf}개는 휘슬 뒤 경기가 멈춘 것으로 판단했습니다. 공격자 파울·바이얼레이션이었는지 장면 보기로 확인해 주세요.`);
   const noNum = events.filter((e) => e.team && !['휘슬'].includes(e.type) && !(e.player || '').trim()).length;
-  if (noNum) msgs.push(`등번호가 없는 기록 ${noNum}개는 선수별 기록에서 '미상'으로 묶입니다. '등번호 넣기'로 채우면 개인 기록이 나옵니다.`);
+  if (noNum) msgs.push(`등번호가 없는 기록 ${noNum}개는 선수별 기록에서 '미상'으로 묶입니다. '빠른 검토'로 채우면 개인 기록이 나옵니다.`);
   return msgs;
 }
 
@@ -124,15 +124,20 @@ function shotsToEvents(shots, s) {
   }));
 }
 
-/** Replace the automatic records with a new analysis, keep manual ones, and carry over jersey
-    numbers typed on automatic records (same team and kind, within 1 s). */
+/** Replace the automatic records with a new analysis. Manual records are kept. What the user did to
+    an automatic record survives when the new analysis finds the same thing (same team, within 1 s):
+    a jersey number is carried over, and a shot the user confirmed keeps its result and kind. */
 function mergeReanalysis(old, auto) {
-  const typed = old.filter((e) => e.source === '자동' && (e.player || '').trim());
+  const shot = (e) => e.type === '야투' || e.type === '자유투';
+  const pool = old.filter((e) => e.source === '자동' && ((e.player || '').trim() || e.checked));
   const fresh = auto.map((e) => {
-    if ((e.player || '').trim()) return e;
-    const m = typed.find((o) => o.team === e.team && o.type === e.type && Math.abs(o.time - e.time) <= 1);
-    if (m) typed.splice(typed.indexOf(m), 1);
-    return m ? { ...e, player: m.player } : e;
+    const k = pool.findIndex((o) => o.team === e.team && (o.type === e.type || (shot(o) && shot(e))) && Math.abs(o.time - e.time) <= 1);
+    if (k < 0) return e;
+    const o = pool.splice(k, 1)[0];
+    const out = { ...e };
+    if ((o.player || '').trim() && !(e.player || '').trim()) out.player = o.player;
+    if (o.checked && shot(e)) Object.assign(out, { type: o.type, detail: o.detail, result: o.result, checked: true, confidence: o.confidence });
+    return out;
   });
   return [...old.filter((e) => e.source !== '자동'), ...fresh].sort((a, b) => a.time - b.time);
 }

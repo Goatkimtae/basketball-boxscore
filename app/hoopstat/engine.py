@@ -370,36 +370,43 @@ def on_rim(d: dict) -> bool:
     return abs(d["bx"] - d["hx"]) <= 0.35 * d["w"] and d["rim_y"] - 0.1 * d["hh"] <= d["by"] <= d["rim_y"] + 0.06 * d["hh"]
 
 
-MADE = dict(x=0.3, start=0.3, end=0.6, gap=0.07, span=0.4, step_x=0.25)
+MADE = dict(rim_w=22.0, a_top=2.5, a_bot=0.25, a_x=0.9, b_top=0.55, b_bot=1.9, b_x=0.45, dt=0.6, pair_dt=0.1, c_x=0.7, fall=0.12, size=0.6)
 
 
-def judge_made(shots: list[ShotCandidate], dets: list[dict], window: float = 2.5) -> None:
-    """Made = the ball is followed falling through the hoop: detections frame after frame (gaps up to
-    0.07 s) from just under the rim (0.3 x hoop height) down to 0.6 x hoop height within 0.4 s, near the
-    rim centre. A swaying net moves about but does not fall steadily. Same rule as the web app."""
+def judge_made(shots: list[ShotCandidate], dets: list[dict], window: float = 2.5, rim_w: float | None = None) -> None:
+    """Made = the ball is seen above the rim and then, within 0.6 s, falling inside the net.
+    Distances in rim widths (about 22 px in a 768 px wide half-court picture). Same rule as the web app."""
+    P = MADE
+    rim_w = rim_w or P["rim_w"]
     by_side = {s: sorted((d for d in dets if d["side"] == s), key=lambda d: d["t"]) for s in SIDES}
-    dy = lambda d: (d["by"] - d["rim_y"]) / d["hh"]
     for i, sh in enumerate(shots):
         nxt = shots[i + 1].start if i + 1 < len(shots) and shots[i + 1].side == sh.side else math.inf
         t_end = min(sh.end + window, nxt + 0.2)
-        ds = [d for d in by_side[sh.side] if sh.start - 0.1 <= d["t"] <= t_end
-              and abs(d["bx"] - d["hx"]) <= MADE["x"] * d["w"] and 0 < dy(d) <= 1.3]
-        hit, steps = None, 0
-        for a in range(len(ds)):
-            if hit or dy(ds[a]) > MADE["start"]:
+        rel = []
+        for d in by_side[sh.side]:
+            if sh.start - 0.1 <= d["t"] <= t_end:
+                r = rim_w * d["w"] / TW
+                rel.append((d["t"], (d["bx"] - d["hx"]) / r, (d["by"] - d["rim_y"]) / r, d["bw"]))
+        above = [a for a in rel if -P["a_top"] <= a[2] <= -P["a_bot"] and abs(a[1]) <= P["a_x"]]
+        hit, pairs = None, 0
+        for b in rel:
+            if hit:
+                break
+            if not (P["b_top"] <= b[2] <= P["b_bot"]) or abs(b[1]) > P["b_x"]:
                 continue
-            cur, n = ds[a], 0
-            for d in ds[a + 1:]:
-                if d["t"] - ds[a]["t"] > MADE["span"]:
-                    break
-                if 0 < d["t"] - cur["t"] <= MADE["gap"] and dy(d) > dy(cur) and abs(d["bx"] - cur["bx"]) <= MADE["step_x"] * cur["w"]:
-                    cur, n = d, n + 1
-                    if dy(cur) >= MADE["end"]:
-                        hit, steps = ds[a], n
-                        break
+            aa = [a for a in above if 0 < b[0] - a[0] <= P["dt"]]
+            if not aa:
+                continue
+            size = P["size"] * max(a[3] for a in aa)
+            if b[3] < size:
+                continue
+            falling = [c for c in rel if c[0] != b[0] and abs(c[0] - b[0]) <= P["pair_dt"] and abs(c[1]) <= P["c_x"] and c[3] >= size
+                       and (c[2] - b[2]) * (1 if c[0] > b[0] else -1) >= P["fall"]]
+            if falling:
+                hit, pairs = b, len(falling)
         sh.made = hit is not None
-        sh.made_t = hit["t"] if hit else None
-        sh.confidence = "보통" if hit and steps >= 3 else "낮음"
+        sh.made_t = hit[0] if hit else None
+        sh.confidence = "보통" if hit and pairs >= 2 else "낮음"
 
 
 # ---------------------------------------------------------------- whole pipeline

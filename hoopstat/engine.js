@@ -252,36 +252,43 @@ function onRim(d) {
   return Math.abs(d.bx - d.hx) <= 0.35 * d.w && d.by >= d.rim_y - 0.1 * d.hh && d.by <= d.rim_y + 0.06 * d.hh;
 }
 
-/* Made = the ball is followed falling through the hoop: a chain of detections, frame after frame
-   (gaps up to 0.07 s), starting just under the rim (within 0.3 x hoop height) and going down to 0.6 x
-   hoop height within 0.4 s, near the rim centre. A swaying net (also red/orange on many hoops) moves
-   about but does not fall steadily, so it no longer counts as a basket. */
-const MADE = { X: 0.3, START: 0.3, END: 0.6, GAP: 0.07, SPAN: 0.4, STEP_X: 0.25 };
-function judgeMade(shots, dets, windowSec = 2.5) {
+/* Made = the ball is seen above the rim and then, within 0.6 s, falling inside the net.
+   Distances are in rim widths (R): a rim is about 22 px wide in a 768 px wide half-court picture
+   (it was on all four hoops checked); a gym profile may carry its own rim width.
+     A (above):  0.25-2.5 R above the rim, within 0.9 R of its centre
+     B (in net): 0.55-1.9 R below the rim, within 0.45 R of its centre, a blob at least 0.6 x as wide as
+                 the ball seen above (the swaying net makes smaller blobs), and
+                 falling: a blob 0.12 R lower within 0.1 s (before/after), also ball-sized
+   Checked on 40 hand-labelled shots from two fixed cameras: 10 of 10 baskets found, none wrong. */
+const MADE = { RIM_W: 22, A_TOP: 2.5, A_BOT: 0.25, A_X: 0.9, B_TOP: 0.55, B_BOT: 1.9, B_X: 0.45, DT: 0.6, PAIR_DT: 0.1, C_X: 0.7, FALL: 0.12, SIZE: 0.6 };
+function judgeMade(shots, dets, windowSec = 2.5, rimW = MADE.RIM_W) {
   const bySide = {};
   for (const s of HS.SIDES) bySide[s] = dets.filter((d) => d.side === s).sort((a, b) => a.t - b.t);
-  const dy = (d) => (d.by - d.rim_y) / d.hh;
   shots.forEach((sh, i) => {
     const next = i + 1 < shots.length && shots[i + 1].side === sh.side ? shots[i + 1].start : Infinity;
     const tEnd = Math.min(sh.end + windowSec, next + 0.2);
-    const ds = bySide[sh.side].filter((d) => d.t >= sh.start - 0.1 && d.t <= tEnd
-      && Math.abs(d.bx - d.hx) <= MADE.X * d.w && dy(d) > 0 && dy(d) <= 1.3);
-    let hit = null, steps = 0;
-    for (let a = 0; a < ds.length && !hit; a++) {
-      if (dy(ds[a]) > MADE.START) continue;
-      let cur = ds[a], n = 0;
-      for (let b = a + 1; b < ds.length; b++) {
-        const d = ds[b];
-        if (d.t - ds[a].t > MADE.SPAN) break;
-        if (d.t - cur.t > 0 && d.t - cur.t <= MADE.GAP && dy(d) > dy(cur) && Math.abs(d.bx - cur.bx) <= MADE.STEP_X * cur.w) {
-          cur = d; n += 1;
-          if (dy(cur) >= MADE.END) { hit = ds[a]; steps = n; break; }
-        }
-      }
+    const rel = bySide[sh.side].filter((d) => d.t >= sh.start - 0.1 && d.t <= tEnd).map((d) => {
+      const R = (rimW * d.w) / HS.TW;
+      return { t: d.t, x: (d.bx - d.hx) / R, y: (d.by - d.rim_y) / R, bw: d.bw };
+    });
+    const above = rel.filter((r) => r.y >= -MADE.A_TOP && r.y <= -MADE.A_BOT && Math.abs(r.x) <= MADE.A_X);
+    let hit = null, pairs = 0;
+    for (const b of rel) {
+      if (hit) break;
+      if (b.y < MADE.B_TOP || b.y > MADE.B_BOT || Math.abs(b.x) > MADE.B_X) continue;
+      const aa = above.filter((a) => b.t - a.t > 0 && b.t - a.t <= MADE.DT);
+      if (!aa.length) continue;
+      const size = MADE.SIZE * Math.max(...aa.map((a) => a.bw));
+      if (b.bw < size) continue;
+      const falling = rel.filter((c) => {
+        const dt = c.t - b.t;
+        return dt !== 0 && Math.abs(dt) <= MADE.PAIR_DT && Math.abs(c.x) <= MADE.C_X && c.bw >= size && (c.y - b.y) * Math.sign(dt) >= MADE.FALL;
+      });
+      if (falling.length) { hit = b; pairs = falling.length; }
     }
     sh.made = !!hit;
     sh.made_t = hit ? hit.t : null;
-    sh.confidence = hit && steps >= 3 ? '보통' : '낮음';
+    sh.confidence = hit && pairs >= 2 ? '보통' : '낮음';
   });
   return shots;
 }
@@ -365,6 +372,7 @@ class WhistleDetector {
     this.m0 = Math.ceil((WH.MID[0] * WH.N) / WH.SR); this.m1 = this.k0 - 1;
     this.band = new Float64Array(this.k1 - this.k0 + 1);
     this.on = []; this.freq = [];
+    this.env = []; this.eAcc = 0; this.prevV = 0;     // loudness of sudden sounds, one value per 10 ms (for syncing cameras)
   }
 
   /** mono samples at the source rate */
@@ -381,8 +389,13 @@ class WhistleDetector {
 
   _sample(v) {
     this.ring[this.filled % WH.N] = v; this.filled += 1; this.sinceHop += 1;
+    const dv = v - this.prevV; this.prevV = v; this.eAcc += dv * dv;
+    if (this.filled % WH.HOP === 0) { this.env.push(Math.log(this.eAcc / WH.HOP + 1e-10)); this.eAcc = 0; }
     if (this.filled >= WH.N && this.sinceHop >= WH.HOP) { this.sinceHop = 0; this._frame(); }
   }
+
+  /** envelope for Sync.offset(): Float32Array at 100 values per second, starting at the first audio sample */
+  envelope() { return Float32Array.from(this.env); }
 
   _frame() {
     const N = WH.N, re = this.re, im = this.im, start = this.filled % N;

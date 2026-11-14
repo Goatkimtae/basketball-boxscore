@@ -125,3 +125,6 @@ canvas.frame, video.frame { width: 100%; max-width: 768px; height: auto; backgro
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 .grid.stats tbody tr { cursor: default; }
 .cmp-wrap { max-width: 560px; }
+body:not(.two) .two-only { display: none; }
+#resBar button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+[hidden] { display: none !important; }

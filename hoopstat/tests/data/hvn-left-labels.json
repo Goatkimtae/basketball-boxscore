@@ -4,17 +4,104 @@
   67,
   151
  ],
- "checked": "Every shot the detector reported was looked at on 5 fps close-ups of the hoop. Shots it did not report were looked for only in the first 122 s.",
- "before_rim_rules": {
-  "shots": 50,
-  "made": 19,
-  "first_122s": "5 real shots found, 10 false (the orange rim itself), 5 made of which 2 real"
+ "checked": "Each of the 22 shots the detector reported (Python engine on the original file, rim rule of 2026-11-14) looked at on frame-accurate 10 fps rim close-ups. Shots it did not report were looked for only in the first 122 s.",
+ "shots": [
+  [
+   18.1,
+   "made (bounced up, dropped in)"
+  ],
+  [
+   37.1,
+   "not a shot (ball passes low at the left edge)"
+  ],
+  [
+   39.3,
+   "miss"
+  ],
+  [
+   65.3,
+   "miss"
+  ],
+  [
+   97.3,
+   "miss"
+  ],
+  [
+   101.7,
+   "made"
+  ],
+  [
+   135.9,
+   "miss"
+  ],
+  [
+   142.6,
+   "miss"
+  ],
+  [
+   151.5,
+   "miss"
+  ],
+  [
+   155.8,
+   "miss"
+  ],
+  [
+   206.9,
+   "miss"
+  ],
+  [
+   237.0,
+   "made"
+  ],
+  [
+   281.9,
+   "miss"
+  ],
+  [
+   288.1,
+   "miss"
+  ],
+  [
+   303.1,
+   "miss or pass (ball drops short)"
+  ],
+  [
+   310.5,
+   "made (rolled in)"
+  ],
+  [
+   337.9,
+   "miss"
+  ],
+  [
+   383.4,
+   "miss"
+  ],
+  [
+   405.8,
+   "miss"
+  ],
+  [
+   420.2,
+   "made"
+  ],
+  [
+   458.3,
+   "miss"
+  ],
+  [
+   469.6,
+   "made"
+  ]
+ ],
+ "result": {
+  "reported": 22,
+  "real_shots": "20-21",
+  "made_true": 6,
+  "made_rule_2026-11-14b": "Python engine: 6 of 6, none wrong. Browser engine on ffmpeg frames: 5 of 6 (18.1 missed), none wrong. Old rule: 5 found, 4 wrong.",
+  "before_rim_rules": "50 reported, most of them the orange rim itself"
  },
- "after_rim_rules": {
-  "shots": 22,
-  "made": 9,
-  "real_shots": "about 19-20 of 22 (2-3 unclear)",
-  "made_check": "3 clearly right (18.1, 101.7, 310.5), 2 look wrong (206.9, 288.1), 4 unclear (37.1, 155.8, 420.2, 469.6)",
-  "first_122s": "5/5 real shots found, 0 false; misses at 39.3, 65.3, 97.3 now judged missed"
- }
+ "two_camera_game": "Sound sync: right video started 1.12 s after the left one (same value from each half and quarter of the game). Merged: 41 shots, 9 made (true 10), score H 10 : N 8 by the app (true 12 : 8 or 10).",
+ "whistles": "44 whistle-like sounds in 8 minutes: one group near 3.3 kHz (probably the referee) and many near 2.2 kHz (unknown: shoes, another whistle or a horn). With fixed cameras the stoppage test passes none, so they are only listed for review."
 }
