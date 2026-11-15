@@ -11,7 +11,7 @@ const LS_PROFILES = 'hoopstat.profiles.v1';
 const LS_WORK = 'hoopstat.work.v1';
 
 const newVid = () => ({ file: null, url: null, duration: 0, ok: false, name: '' });
-const S = { vids: { A: newVid(), B: newVid() }, events: [], selId: null, worker: null, cancel: null, ctx: null,
+const S = { vids: { A: newVid(), B: newVid() }, events: [], selId: null, workers: [], ctx: null,
   reviewing: false, skipped: new Set(), sceneCam: null, sceneToken: 0, grabChain: Promise.resolve() };
 
 /* ------------------------------------------------------------------ storage */
@@ -256,20 +256,25 @@ $('delProfileBtn').addEventListener('click', () => {
 });
 
 /* ------------------------------------------------------------------ analysis */
+/** One worker per video; with two cameras both run at the same time. */
 function runWorker(file, templates, onProgress) {
   return new Promise((resolve, reject) => {
     const w = new Worker('worker.js');
-    S.worker = w;
-    S.cancel = () => { w.terminate(); reject(new Error('cancelled')); };
+    const end = () => { w.terminate(); S.workers = S.workers.filter((x) => x.w !== w); };
+    S.workers.push({ w, reject });
     w.onmessage = (ev) => {
       const m = ev.data;
       if (m.type === 'progress') onProgress(m);
-      else if (m.type === 'done') { w.terminate(); resolve(m.result); }
-      else if (m.type === 'error') { w.terminate(); reject(new Error(m.message)); }
+      else if (m.type === 'done') { end(); resolve(m.result); }
+      else if (m.type === 'error') { end(); reject(new Error(m.message)); }
     };
-    w.onerror = (e) => { w.terminate(); reject(new Error(`분석 중 오류가 났습니다: ${e.message}`)); };
+    w.onerror = (e) => { end(); reject(new Error(`분석 중 오류가 났습니다: ${e.message}`)); };
     w.postMessage({ cmd: 'analyze', file, templates });
   });
+}
+function stopWorkers() {
+  const list = S.workers; S.workers = [];
+  for (const x of list) { x.w.terminate(); x.reject(new Error('cancelled')); }
 }
 /** whistles heard by either camera, on the record's clock */
 function mergeWhistles(a, b, off) {
@@ -294,17 +299,18 @@ async function runAnalysis() {
     : [{ cam: 'A', name: '', file: S.vids.A.file, tpl }];
   $('runBtn').disabled = true; $('cancelBtn').disabled = false; $('bar').value = 0;
   status('분석 준비 중… (처음에는 분석 도구를 내려받느라 조금 걸립니다)');
-  const t0 = performance.now(), res = [];
+  const t0 = performance.now(), prog = jobs.map(() => ({ frac: 0, eta: null, label: '영상 읽는 중' }));
+  const show = () => {
+    const frac = prog.reduce((a, p) => a + p.frac, 0) / prog.length, etas = prog.map((p) => p.eta).filter((x) => x != null);
+    $('bar').value = frac;
+    const slow = prog.reduce((a, p) => (p.frac < a.frac ? p : a));
+    status(`${two ? '두 영상 함께 ' : ''}${slow.label} ${(frac * 100).toFixed(0)}%${etas.length === prog.length ? ` · 남은 시간 약 ${fmtSec(Math.max(...etas))}` : ''}`);
+  };
+  let res;
   try {
-    for (let i = 0; i < jobs.length; i++) {
-      const j = jobs[i];
-      res.push(await runWorker(j.file, j.tpl, (m) => {
-        $('bar').value = (i + m.frac) / jobs.length;
-        status(`${j.name ? `${j.name} ` : ''}${m.label} ${(m.frac * 100).toFixed(0)}%${m.eta != null ? ` · 남은 시간 약 ${fmtSec(m.eta + (jobs.length - 1 - i) * (m.eta / Math.max(0.02, 1 - m.frac)))}` : ''}`);
-      }));
-    }
+    res = await Promise.all(jobs.map((j, i) => runWorker(j.file, j.tpl, (m) => { prog[i] = { frac: m.frac, eta: m.eta ?? null, label: m.label }; show(); })));
   } catch (err) {
-    finish();
+    stopWorkers(); finish();
     if (err.message !== 'cancelled') { status('분석하지 못했습니다.'); alert(err.message); }
     return;
   }
@@ -350,11 +356,9 @@ async function runAnalysis() {
 }
 $('runBtn').addEventListener('click', runAnalysis);
 function finish() {
-  if (S.worker) { S.worker.terminate(); S.worker = null; }
-  S.cancel = null;
   $('runBtn').disabled = false; $('cancelBtn').disabled = true;
 }
-$('cancelBtn').addEventListener('click', () => { const c = S.cancel; finish(); if (c) c(); status('분석을 취소했습니다.'); });
+$('cancelBtn').addEventListener('click', () => { stopWorkers(); finish(); status('분석을 취소했습니다.'); });
 
 /* ------------------------------------------------------------------ tables */
 function cell(text, cls) { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text ?? ''; return td; }

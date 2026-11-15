@@ -12,6 +12,11 @@ const HS = {
   SCALES: [0.8, 0.9, 1.0, 1.1, 1.25],
   HOOP_THR: 0.65,
   SEARCH_TOP: 0.65,
+  // Speed: a hoop in view is looked for only near where it was (it moves a few pixels per frame at most).
+  // The whole picture is searched when it is lost and on every sample for LOST_HOLD samples after that
+  // (a hoop at the edge of the picture comes and goes), then every FULL_EVERY-th sample while it stays
+  // out of view, and every FULL_CHECK-th sample as a check on the one being followed.
+  LOCAL_X: 32, LOCAL_Y: 16, FULL_EVERY: 4, FULL_CHECK: 30, LOST_HOLD: 15,
   // ball hue is red-orange on compressed phone video; the range wraps through red
   BALL_RANGES: [[[0, 100, 70], [22, 255, 255]], [[176, 100, 70], [180, 255, 255]]],
   BALL_AREA: [12, 160],
@@ -36,21 +41,62 @@ class HoopTracker {
       base.delete();
     }
     this.res = new cv.Mat();
+    this.last = {}; this.lost = {}; this.count = 0;
   }
 
-  /** gray: CV_8UC1 top part of the frame. Returns {L:[score,x,y,scale], R:[...]} */
-  match(gray) {
-    const out = {};
-    for (const side of HS.SIDES) {
-      let best = [-1, 0, 0, 1];
-      for (const { sc, m } of this.scaled[side] || []) {
-        if (m.rows >= gray.rows || m.cols >= gray.cols) continue;
-        cv.matchTemplate(gray, m, this.res, cv.TM_CCOEFF_NORMED);
-        const mm = cv.minMaxLoc(this.res);
-        if (mm.maxVal > best[0]) best = [mm.maxVal, mm.maxLoc.x + m.cols / 2, mm.maxLoc.y + m.rows / 2, sc];
-      }
-      out[side] = best;
+  /** best match over the whole picture and every scale: [score, x, y, scale] */
+  _full(gray, side) {
+    let best = [-1, 0, 0, 1];
+    for (const { sc, m } of this.scaled[side] || []) {
+      if (m.rows >= gray.rows || m.cols >= gray.cols) continue;
+      cv.matchTemplate(gray, m, this.res, cv.TM_CCOEFF_NORMED);
+      const mm = cv.minMaxLoc(this.res);
+      if (mm.maxVal > best[0]) best = [mm.maxVal, mm.maxLoc.x + m.cols / 2, mm.maxLoc.y + m.rows / 2, sc];
     }
+    return best;
+  }
+
+  /** best match near the last position, at the last scale and the ones next to it */
+  _local(gray, side, last) {
+    const list = this.scaled[side], k = list.findIndex((x) => x.sc === last[3]);
+    let best = [-1, 0, 0, 1];
+    for (let i = Math.max(0, k - 1); i <= Math.min(list.length - 1, k + 1); i++) {
+      const { sc, m } = list[i];
+      const w = Math.min(gray.cols, m.cols + 2 * HS.LOCAL_X), h = Math.min(gray.rows, m.rows + 2 * HS.LOCAL_Y);
+      if (w <= m.cols || h <= m.rows) continue;
+      const x0 = Math.max(0, Math.min(gray.cols - w, Math.round(last[1] - m.cols / 2) - HS.LOCAL_X));
+      const y0 = Math.max(0, Math.min(gray.rows - h, Math.round(last[2] - m.rows / 2) - HS.LOCAL_Y));
+      const win = gray.roi(new cv.Rect(x0, y0, w, h));
+      cv.matchTemplate(win, m, this.res, cv.TM_CCOEFF_NORMED);
+      const mm = cv.minMaxLoc(this.res);
+      win.delete();
+      if (mm.maxVal > best[0]) best = [mm.maxVal, x0 + mm.maxLoc.x + m.cols / 2, y0 + mm.maxLoc.y + m.rows / 2, sc];
+    }
+    return best;
+  }
+
+  /** gray: CV_8UC1 top part of the frame. Returns {왼쪽: [score, x, y, scale], 오른쪽: [...]} */
+  match(gray) {
+    const out = {}, n = this.count++;
+    HS.SIDES.forEach((side, si) => {
+      if (!this.scaled[side]) { out[side] = [-1, 0, 0, 1]; return; }
+      const last = this.last[side];
+      const seen = !!last && last[0] >= HS.HOOP_THR;
+      let best = null;
+      if (seen) {
+        const b = this._local(gray, side, last);
+        if (b[0] >= HS.HOOP_THR) best = b;
+        if (best && (n + si * 7) % HS.FULL_CHECK === 0) { const f = this._full(gray, side); if (f[0] > best[0]) best = f; }
+      }
+      if (!best) {
+        // lost just now or a moment ago, or never looked: search everywhere; out of view for a while: keep that answer between full looks
+        if (seen) this.lost[side] = n;
+        const recent = this.lost[side] !== undefined && n - this.lost[side] < HS.LOST_HOLD;
+        if (!last || recent || (n + si * 2) % HS.FULL_EVERY === 0) best = this._full(gray, side);
+        else best = last;
+      }
+      this.last[side] = best; out[side] = best;
+    });
     return out;
   }
 
@@ -103,19 +149,39 @@ class BallDetector {
     const x0 = Math.max(0, Math.trunc(hx - 2.2 * w)), x1 = Math.min(W, Math.trunc(hx + 2.2 * w));
     const y0 = 0, y1 = Math.min(H, Math.trunc(rimY + 1.4 * hh));
     if (x1 - x0 < 8 || y1 - y0 < 8) return [];
-    const M = cv.matFromArray(2, 3, cv.CV_64F, [1, 0, hx - php[1], 0, 1, hy - php[2]]);
-    cv.warpAffine(prev, this.prevAligned, M, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
-    M.delete();
     const rect = new cv.Rect(x0, y0, x1 - x0, y1 - y0);
-    const c = cur.roi(rect), p = this.prevAligned.roi(rect);
+    const dx = hx - php[1], dy = hy - php[2];
+    let p, own = true;
+    if (dx === 0 && dy === 0) {
+      p = prev.roi(rect);                                  // the camera did not move: nothing to align
+    } else {
+      // align only the part that is looked at: the source area of the shifted ROI, one pixel wider for the interpolation
+      const sx0 = Math.max(0, Math.floor(rect.x - dx) - 1), sy0 = Math.max(0, Math.floor(rect.y - dy) - 1);
+      const sx1 = Math.min(W, Math.ceil(rect.x + rect.width - dx) + 1), sy1 = Math.min(H, Math.ceil(rect.y + rect.height - dy) + 1);
+      if (sx1 - sx0 >= 2 && sy1 - sy0 >= 2) {
+        const src = prev.roi(new cv.Rect(sx0, sy0, sx1 - sx0, sy1 - sy0));
+        const M = cv.matFromArray(2, 3, cv.CV_64F, [1, 0, dx - rect.x + sx0, 0, 1, dy - rect.y + sy0]);
+        cv.warpAffine(src, this.prevAligned, M, new cv.Size(rect.width, rect.height), cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
+        M.delete(); src.delete();
+        p = this.prevAligned; own = false;
+      } else {
+        const M = cv.matFromArray(2, 3, cv.CV_64F, [1, 0, dx, 0, 1, dy]);
+        cv.warpAffine(prev, this.prevAligned, M, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
+        M.delete();
+        p = this.prevAligned.roi(rect);
+      }
+    }
+    const c = cur.roi(rect);
+    cv.cvtColor(c, this.g1, cv.COLOR_RGBA2GRAY);
+    cv.cvtColor(p, this.g2, cv.COLOR_RGBA2GRAY);
+    if (own) p.delete();
+    cv.absdiff(this.g1, this.g2, this.diff);
+    cv.threshold(this.diff, this.diff, 20, 255, cv.THRESH_BINARY);
+    if (cv.countNonZero(this.diff) === 0) { c.delete(); return []; }      // nothing moved near the hoop
     cv.cvtColor(c, this.rgb, cv.COLOR_RGBA2RGB);
     if (this.blur) cv.GaussianBlur(this.rgb, this.rgb, new cv.Size(this.blur, this.blur), 0, 0, cv.BORDER_DEFAULT);
     cv.cvtColor(this.rgb, this.hsv, cv.COLOR_RGB2HSV);
-    cv.cvtColor(c, this.g1, cv.COLOR_RGBA2GRAY);
-    cv.cvtColor(p, this.g2, cv.COLOR_RGBA2GRAY);
-    c.delete(); p.delete();
-    cv.absdiff(this.g1, this.g2, this.diff);
-    cv.threshold(this.diff, this.diff, 20, 255, cv.THRESH_BINARY);
+    c.delete();
     cv.dilate(this.diff, this.moving, this.k5, new cv.Point(-1, -1), 1, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
     // orange AND moving
     const hsv = this.hsv.data, mov = this.moving.data, n = rect.width * rect.height;
