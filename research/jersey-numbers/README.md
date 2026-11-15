@@ -24,3 +24,17 @@
 - `ball_track.py` — 슛 직전 공의 위치를 거꾸로 따라가 슈터가 공을 들고 있던 지점을 찾는 방법.
 - `eval_rules.py` — 규칙별 정답 수 계산(`python eval_rules.py`, `data/shots.json`만 있으면 됨).
 - `data/shots.json` — 슛 40개의 공 궤적, 0.1초 간격으로 읽은 번호 상자, 눈으로 확인한 슈터 번호.
+
+## Claude에게 묻는 시험 (`claude_test/`)
+
+슛마다 슈터가 공을 잡은 순간 앞뒤 3장면(공에 노란 원)을 잘라 Claude API에 보내고 슈터 번호를 묻습니다.
+사진은 Anthropic 서버로 전송됩니다. 영상 원본과 잘라낸 사진은 저장소에 올리지 않습니다.
+
+```bash
+python claude_test/make_frames.py <왼쪽 골대 영상> <오른쪽 골대 영상> <작업 폴더>
+HOOPSTAT_TEST_DIR=<작업 폴더> HOOPSTAT_CLAUDE_KEY=<API 키> python claude_test/ask_claude.py claude-opus-5-5 medium
+python claude_test/score.py <작업 폴더>/answers_claude-opus-5-5_medium.json
+```
+
+키는 `HOOPSTAT_CLAUDE_KEY`로 읽습니다(`ANTHROPIC_API_KEY`를 쓰지 않는 것은 Claude Code가 그 키로 바뀌어 쓰지 않게 하려는 것).
+정답은 사람이 아니라 Claude Code가 눈으로 본 번호라서, 같은 계열 모델끼리 같은 실수를 할 수 있습니다. 사람이 확인한 정답으로 다시 재야 합니다.
