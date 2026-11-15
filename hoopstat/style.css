@@ -128,3 +128,6 @@ canvas.frame, video.frame { width: 100%; max-width: 768px; height: auto; backgro
 body:not(.two) .two-only { display: none; }
 #resBar button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
 [hidden] { display: none !important; }
+
+label.check { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 10px; font-weight: 600; }
+label.check .muted { font-weight: 400; }

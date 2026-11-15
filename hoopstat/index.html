@@ -106,6 +106,8 @@
       <progress id="bar" max="1" value="0"></progress>
       <span id="status" class="status">영상을 고르고, 체육관 설정을 고른 뒤 '분석 시작'을 누르세요.</span>
     </div>
+    <label class="check"><input type="checkbox" id="auto_players" checked> 선수 번호·팀 자동 찾기
+      <span class="muted">팀 색, 팀별 등번호(비어 있을 때), 공격 방향, 슈터 번호. 처음 한 번 모델 약 30MB를 내려받고 분석 시간이 몇 분 늘어납니다.</span></label>
   </section>
 
   <section class="card" id="step3">
@@ -270,6 +272,7 @@
 <script src="flow.js"></script>
 <script src="sync.js"></script>
 <script src="export.js"></script>
+<script src="players.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

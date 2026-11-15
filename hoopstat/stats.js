@@ -135,7 +135,8 @@ function mergeReanalysis(old, auto) {
     if (k < 0) return e;
     const o = pool.splice(k, 1)[0];
     const out = { ...e };
-    if ((o.player || '').trim() && !(e.player || '').trim()) out.player = o.player;
+    // a number typed by hand stays; one read automatically gives way to the new reading
+    if ((o.player || '').trim() && (!(e.player || '').trim() || !o.playerAuto)) { out.player = o.player; out.playerAuto = !!o.playerAuto; }
     if (o.checked && shot(e)) Object.assign(out, { type: o.type, detail: o.detail, result: o.result, checked: true, confidence: o.confidence });
     return out;
   });

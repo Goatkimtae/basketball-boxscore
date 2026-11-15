@@ -363,6 +363,80 @@ function judgeMade(shots, dets, windowSec = 2.5, rimW = MADE.RIM_W) {
    Share of the floor area that changed between two sampled frames, after removing camera movement
    (a patch of the upper background is matched between the frames). Players standing still - the
    stoppage after a whistle, the set-up for a free throw - give low values. */
+/* ---------------------------------------------------------------- where the shooter held the ball
+   Follows the ball back in time from the hoop: each step takes the detection closest to where the motion so
+   far predicts it (positions relative to the hoop, so camera motion drops out). The best of several starts
+   (the ball nearest the rim, and the shot's first frames) is kept: a real flight has many points and starts
+   well before the hoop. The gather is the ball's lowest point on its way up: the shooter's hands.
+   Same method as research/jersey-numbers/ball_track.py. */
+const SHOOTER = { R: 22, SPAN: 1.6, GAP: 4, BEFORE: 0.25, AFTER: 0.3 };
+function ballIndex(dets, fps) {
+  const m = new Map();
+  for (const d of dets) { const f = Math.round(d.t * fps); if (!m.has(f)) m.set(f, []); m.get(f).push(d); }
+  return m;
+}
+function ballBackFrom(seed, side, byFrame, span, fps) {
+  const pos = (d) => [d.bx - d.hx, d.by - d.hy];
+  const pts = [seed], f0 = Math.round(seed.t * fps);
+  let cur = seed, f = f0;
+  while (f0 - f < span * fps) {
+    let v = null;
+    if (pts.length >= 2) {
+      const a = pts[pts.length - 1], b = pts[Math.max(0, pts.length - 4)], n = Math.round((b.t - a.t) * fps);
+      if (n > 0) v = [(pos(a)[0] - pos(b)[0]) / n, (pos(a)[1] - pos(b)[1]) / n];
+    }
+    let best = null;
+    for (let k = 1; k <= SHOOTER.GAP && !best; k++) {
+      let [px, py] = pos(cur);
+      if (v) { px += v[0] * k; py += v[1] * k; }
+      const limit = v ? 7 + 5 * k : 10 + 9 * k;
+      for (const d of byFrame.get(f - k) || []) {
+        if (d.side !== side) continue;
+        const e = Math.hypot(pos(d)[0] - px, pos(d)[1] - py);
+        if (e <= limit && (!best || e < best[0])) best = [e, k, d];
+      }
+    }
+    if (!best) break;
+    f -= best[1]; cur = best[2]; pts.push(cur);
+  }
+  return pts.reverse();
+}
+function shooterBall(shot, kept, byFrame, fps) {
+  const zone = kept.filter((d) => d.side === shot.side && d.t >= shot.start - 1e-6 && d.t <= Math.min(shot.end, shot.start + 1.0) + 1e-6);
+  if (!zone.length) return [];
+  const near = zone.map((d, i) => [Math.hypot(d.bx - d.hx, d.by - d.rim_y), i, d]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 4).map((x) => x[2]);
+  const early = zone.filter((d) => d.t <= shot.start + 0.3 && d.by < d.rim_y + 0.15 * d.hh && Math.abs(d.bx - d.hx) <= 1.6 * d.w);
+  let best = [], score = -1;
+  for (const seed of [...near, ...early]) {
+    const p = ballBackFrom(seed, shot.side, byFrame, SHOOTER.SPAN, fps);
+    const sc = p.length + 30 * Math.max(0, shot.start - p[0].t);
+    if (sc > score) { best = p; score = sc; }
+  }
+  return best;
+}
+function gatherIndex(pts, shot) {
+  let end = 0, top = -Infinity;
+  pts.forEach((p, i) => { const key = p.t <= shot.start + 0.6 ? -p.by : -1e9; if (key > top) { top = key; end = i; } });
+  let g = end, low = pts[end].by;
+  for (let i = end; i >= 0; i--) {
+    if (pts[i].by >= low) { low = pts[i].by; g = i; } else if (low - pts[i].by > 0.6 * SHOOTER.R) break;
+  }
+  return g;
+}
+/** adds shot.gather {t, x, y, rimW} and shot.ball [[t, x, y], ...] around it (PROC_W coordinates) */
+function addGathers(shots, kept, fps) {
+  const byFrame = ballIndex(kept, fps);
+  for (const s of shots) {
+    const pts = shooterBall(s, kept, byFrame, fps);
+    if (!pts.length) continue;
+    const g = pts[gatherIndex(pts, s)];
+    const r3 = (v) => Math.round(v * 1000) / 1000, r1 = (v) => Math.round(v * 10) / 10;
+    s.gather = { t: r3(g.t), x: r1(g.bx), y: r1(g.by), rimW: r1((SHOOTER.R * g.w) / HS.TW) };
+    s.ball = pts.filter((p) => p.t >= g.t - SHOOTER.BEFORE && p.t <= g.t + SHOOTER.AFTER).map((p) => [r3(p.t), r1(p.bx), r1(p.by)]);
+  }
+  return shots;
+}
+
 const MOTION = { W: 192, PATCH: [48, 6, 96, 36], SEARCH_X: 14, SEARCH_Y: 6, THR: 18, TOP: 0.28, MIN_SCORE: 0.4 };
 
 class SceneMotion {
@@ -536,6 +610,8 @@ class Analyzer {
   /** rgba: cv.Mat (RGBA, PROC_W wide). Ownership passes to the analyzer. */
   push(t, rgba) {
     const i = ++this.last;
+    if (i === 0) this.tFirst = t;
+    this.tLast = t;
     this.frames.set(i, { t, mat: rgba, hp: undefined });
     if (i % 2 === 0) {
       cv.cvtColor(rgba, this.gray, cv.COLOR_RGBA2GRAY);
@@ -556,12 +632,19 @@ class Analyzer {
     const results = this.variants.map((v) => {
       v.ball.delete();
       const kept = trackFilter(v.dets.filter((d) => !onRim(d)));
-      return { params: v.params, shots: judgeMade(groupShots(kept), kept), ballFrames: kept.length, dets: this.debug ? v.dets : undefined };
+      return { params: v.params, shots: addGathers(judgeMade(groupShots(kept), kept), kept, this.fps()), ballFrames: kept.length, dets: this.debug ? v.dets : undefined };
     });
     const main = results[0];
     return { shots: main.shots, ballFrames: main.ballFrames, visibility: visibility(this.samples), frames: this.last + 1,
       track: cameraTrack(this.samples),
       variants: results.length > 1 || this.debug ? results : undefined, samples: this.debug ? this.samples : undefined };
+  }
+
+  /** frames per second of the video, from the frame times (ball steps are counted in frames) */
+  fps() {
+    const n = this.last + 1;
+    if (n < 2 || !(this.tLast > this.tFirst)) return 30;
+    return Math.max(10, Math.min(120, Math.round((n - 1) / (this.tLast - this.tFirst))));
   }
 
   _sampleFor(j, ended) {
@@ -595,5 +678,5 @@ class Analyzer {
   }
 }
 
-if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, MADE, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
-if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, MADE, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };
+if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, MADE, SHOOTER, ballIndex, ballBackFrom, shooterBall, gatherIndex, addGathers, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
+if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, MADE, SHOOTER, ballIndex, ballBackFrom, shooterBall, gatherIndex, addGathers, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };

@@ -256,10 +256,10 @@ $('delProfileBtn').addEventListener('click', () => {
 });
 
 /* ------------------------------------------------------------------ analysis */
-/** One worker per video; with two cameras both run at the same time. */
-function runWorker(file, templates, onProgress) {
+/** A worker running `script` with message `msg`; progress messages go to onProgress, others (e.g. 'shot') to onOther. */
+function runWorker(script, msg, onProgress, onOther) {
   return new Promise((resolve, reject) => {
-    const w = new Worker('worker.js');
+    const w = new Worker(script);
     const end = () => { w.terminate(); S.workers = S.workers.filter((x) => x.w !== w); };
     S.workers.push({ w, reject });
     w.onmessage = (ev) => {
@@ -267,9 +267,10 @@ function runWorker(file, templates, onProgress) {
       if (m.type === 'progress') onProgress(m);
       else if (m.type === 'done') { end(); resolve(m.result); }
       else if (m.type === 'error') { end(); reject(new Error(m.message)); }
+      else if (onOther) onOther(m);
     };
     w.onerror = (e) => { end(); reject(new Error(`분석 중 오류가 났습니다: ${e.message}`)); };
-    w.postMessage({ cmd: 'analyze', file, templates });
+    w.postMessage(msg);
   });
 }
 function stopWorkers() {
@@ -287,6 +288,96 @@ function mergeWhistles(a, b, off) {
 }
 const soundText = (r) => (r.audio === 'ok' ? null : r.audio === 'none' ? '영상에 소리가 없음' : '이 브라우저가 소리 형식을 읽지 못함');
 
+/* ------------------------------------------------------------------ players: teams, numbers, attack direction */
+/** numbers typed (or filled in) for a team in step 1 */
+function rosterList(team) {
+  const s = settings(), [a, b] = teams();
+  const raw = team === a ? s.roster_left : team === b ? s.roster_right : '';
+  return (raw || '').split(/[\s,·/]+/).map((x) => x.replace(/^#/, '').trim()).filter(Boolean);
+}
+/** a measured shirt colour (OpenCV Lab) -> the nearest colour name of the list in step 1 */
+function colourName(lab) {
+  const [L, a, b] = [lab[0], lab[1] - 128, lab[2] - 128];
+  if (Math.hypot(a, b) < 12) return L >= 120 ? '흰색' : L >= 70 ? '회색' : b < -4 ? '남색' : '검정';
+  const hexLab = (hex) => {               // sRGB -> OpenCV 8-bit Lab
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    const X = (0.412453 * c[0] + 0.35758 * c[1] + 0.180423 * c[2]) / 0.950456, Y = 0.212671 * c[0] + 0.71516 * c[1] + 0.072169 * c[2];
+    const Z = (0.019334 * c[0] + 0.119193 * c[1] + 0.950227 * c[2]) / 1.088754;
+    const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+    return [(116 * f(Y) - 16) * 2.55, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))];
+  };
+  let best = '회색', bd = Infinity;
+  for (const [name, hex] of Object.entries(Export.TEAM_COLORS)) {
+    if (['흰색', '검정', '회색'].includes(name)) continue;
+    const q = hexLab(hex), d = Math.hypot(0.5 * (q[0] - L), q[1] - a, q[2] - b);
+    if (d < bd) { bd = d; best = name; }
+  }
+  return best;
+}
+const DEFAULT_TEAMS = ['빨강', '남색'];
+
+/** Second stage: people, their shirt colours and numbers. Fills in step 1 (team colours and numbers, when the
+    number lists are empty) and puts the shooter's number on shots where it was read near the moment the shooter
+    held the ball and belongs to the team attacking that hoop. Returns a note for the status line. */
+async function findPlayers(jobs, res, off, onProgress) {
+  const per = (navigator.hardwareConcurrency || 4) >= 8 ? 2 : 1, tasks = [];
+  jobs.forEach((j, vi) => {
+    const shots = res[vi].shots.map((sh, k) => (sh.gather ? { id: `${j.cam}:${k}`, t: sh.gather.t, x: sh.gather.x, y: sh.gather.y, rimW: sh.gather.rimW, ball: sh.ball || [] } : null)).filter(Boolean);
+    const dur = res[vi].duration || S.vids[j.cam].duration || 0;
+    for (let p = 0; p < per; p++) {
+      tasks.push({ cmd: 'players', file: j.file, procW: PROC_W, people: [(p * dur) / per, ((p + 1) * dur) / per],
+        shots: shots.filter((_, k) => Math.floor((k * per) / Math.max(1, shots.length)) === p) });
+    }
+  });
+  // fetch the models once here, so the workers find them in the cache instead of each downloading them
+  await Promise.all(['vendor/models/person.onnx', 'vendor/models/text-det.onnx', 'vendor/models/text-rec.onnx', 'vendor/ort-wasm-simd.wasm', 'vendor/ort.wasm.min.js']
+    .map((u) => fetch(u).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null)));
+  const fr = tasks.map(() => 0);
+  const out = await Promise.all(tasks.map((t, i) => runWorker('players.js', t, (m) => { fr[i] = m.frac; onProgress(fr.reduce((a, b) => a + b, 0) / fr.length); })));
+  const byId = new Map(out.flatMap((r) => r.shots).map((x) => [x.id, x]));
+  const found = Players.findTeams(out.flatMap((r) => r.people));
+  const clock = (cam, t) => t + (cam === 'B' ? off : 0);
+  const shotList = [];
+  jobs.forEach((j, vi) => res[vi].shots.forEach((sh, k) => {
+    const r = byId.get(`${j.cam}:${k}`);
+    if (r) shotList.push({ sh, cam: j.cam, r, side: sh.side, t: clock(j.cam, sh.start), lab: r.lab, number: r.number });
+  }));
+  const notes = [];
+  const dir = found ? Players.attackDirection(found, shotList, settings().switch_time) : null;
+  console.info('[players]', JSON.stringify({ teams: found && found.teams.map((t) => ({ colour: t.colour, numbers: t.numbers, seen: t.seen })),
+    others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: dir && dir.votes,
+    shots: shotList.map((x) => [x.cam, Math.round(x.sh.start * 10) / 10, x.side, x.number, x.r.gap, x.r.runReads, x.r.reads.length]) }));
+  if (found && dir) {
+    const left = found.teams[dir.left], right = found.teams[1 - dir.left];
+    const filled = [];
+    for (const [side, team] of [['left', left], ['right', right]]) {
+      if ($(`roster_${side}`).value.trim()) continue;             // numbers typed by the user stay
+      $(`roster_${side}`).value = team.numbers.join(' ');
+      $(`color_${side}`).value = colourName(team.lab);
+      filled.push(side);
+    }
+    if (filled.length && $('team_left').value.trim() === DEFAULT_TEAMS[0] && $('team_right').value.trim() === DEFAULT_TEAMS[1]) {
+      let [nl, nr] = [$('color_left').value, $('color_right').value];
+      if (nl === nr) { nl += ' A'; nr += ' B'; }
+      $('team_left').value = nl; $('team_right').value = nr;
+    }
+    const [ta, tb] = teams();
+    notes.push(`팀 자동 찾기: 왼쪽 골대 공격 ${ta}(${left.numbers.join('·') || '번호 없음'}), 오른쪽 ${tb}(${right.numbers.join('·') || '번호 없음'})`
+      + (filled.length < 2 ? ' — 이미 적힌 등번호 명단은 그대로 둠' : ''));
+  } else {
+    notes.push(found ? '공격 방향을 셔츠 색으로 가리지 못함(슛이 적거나 섞임)' : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
+  }
+  let auto = 0;
+  for (const x of shotList) {
+    if (!x.number) continue;
+    const team = Stats.teamFor(x.side, x.t, settings());
+    if (rosterList(team).includes(x.number)) { x.sh.player = x.number; x.sh.playerAuto = true; auto++; }
+  }
+  notes.push(`슛 ${shotList.length}개 중 ${auto}개의 슈터 번호를 자동으로 넣음`);
+  save();
+  return notes.join(' · ');
+}
+
 async function runAnalysis() {
   const s = settings(), two = twoCam();
   if (!S.vids.A.file || (two && !S.vids.B.file)) { alert(two ? '왼쪽 골대 영상과 오른쪽 골대 영상을 모두 고르세요.' : '분석할 경기 영상을 고르세요.'); return; }
@@ -297,30 +388,32 @@ async function runAnalysis() {
   const jobs = two
     ? [{ cam: 'A', name: '왼쪽 골대 영상', file: S.vids.A.file, tpl: { 왼쪽: tpl['왼쪽'] } }, { cam: 'B', name: '오른쪽 골대 영상', file: S.vids.B.file, tpl: { 오른쪽: tpl['오른쪽'] } }]
     : [{ cam: 'A', name: '', file: S.vids.A.file, tpl }];
+  const withPlayers = $('auto_players').checked;
   $('runBtn').disabled = true; $('cancelBtn').disabled = false; $('bar').value = 0;
   status('분석 준비 중… (처음에는 분석 도구를 내려받느라 조금 걸립니다)');
   const t0 = performance.now(), prog = jobs.map(() => ({ frac: 0, eta: null, label: '영상 읽는 중' }));
+  const stage1 = withPlayers ? 0.6 : 1;          // share of the bar for the first stage
   const show = () => {
     const frac = prog.reduce((a, p) => a + p.frac, 0) / prog.length, etas = prog.map((p) => p.eta).filter((x) => x != null);
-    $('bar').value = frac;
+    $('bar').value = frac * stage1;
     const slow = prog.reduce((a, p) => (p.frac < a.frac ? p : a));
-    status(`${two ? '두 영상 함께 ' : ''}${slow.label} ${(frac * 100).toFixed(0)}%${etas.length === prog.length ? ` · 남은 시간 약 ${fmtSec(Math.max(...etas))}` : ''}`);
+    status(`${withPlayers ? '1/2 ' : ''}${two ? '두 영상 함께 ' : ''}${slow.label} ${(frac * 100).toFixed(0)}%${etas.length === prog.length ? ` · 남은 시간 약 ${fmtSec(Math.max(...etas))}` : ''}`);
   };
   let res;
   try {
-    res = await Promise.all(jobs.map((j, i) => runWorker(j.file, j.tpl, (m) => { prog[i] = { frac: m.frac, eta: m.eta ?? null, label: m.label }; show(); })));
+    res = await Promise.all(jobs.map((j, i) => runWorker('worker.js', { cmd: 'analyze', file: j.file, templates: j.tpl },
+      (m) => { prog[i] = { frac: m.frac, eta: m.eta ?? null, label: m.label }; show(); })));
   } catch (err) {
     stopWorkers(); finish();
     if (err.message !== 'cancelled') { status('분석하지 못했습니다.'); alert(err.message); }
     return;
   }
-  finish();
-  let result, syncNote = '';
+  let syncNote = '', off = 0;
   if (two) {
     const [a, b] = res;
     const sy = Sync.offset(a.env, b.env);
     if (sy.ok) {
-      const off = Math.round((sy.offset + (a.envStart || 0) - (b.envStart || 0)) * 100) / 100;
+      off = Math.round((sy.offset + (a.envStart || 0) - (b.envStart || 0)) * 100) / 100;
       $('cam_offset').value = off.toFixed(2);
       $('syncInfo').textContent = `소리로 자동 맞춤(일치도 ${sy.score})`;
       syncNote = ` 두 영상 시작 차이 ${off.toFixed(2)}초(소리로 맞춤).`;
@@ -328,7 +421,28 @@ async function runAnalysis() {
       $('syncInfo').textContent = '소리로 맞추지 못함 — 직접 적어 주세요';
       syncNote = ` 두 영상의 시작 차이를 소리로 맞추지 못해 ${settings().cam_offset}초로 두었습니다. 다르면 '두 영상 시작 차이'를 고치고 다시 분석하세요.`;
     }
-    const off = settings().cam_offset;
+    off = settings().cam_offset;
+  }
+  let playersNote = '';
+  if (withPlayers) {
+    const tp = performance.now();
+    status('2/2 선수 번호·팀 찾는 중… (처음에는 모델 약 30MB를 내려받습니다)');
+    try {
+      playersNote = await findPlayers(jobs, res, off, (frac) => {
+        $('bar').value = stage1 + (1 - stage1) * frac;
+        const el = (performance.now() - tp) / 1000, eta = frac > 0.05 ? (el / frac) * (1 - frac) : null;
+        status(`2/2 선수 번호·팀 찾는 중 ${(frac * 100).toFixed(0)}%${eta != null ? ` · 남은 시간 약 ${fmtSec(eta)}` : ''}`);
+      });
+    } catch (err) {
+      if (err.message === 'cancelled') { finish(); return; }
+      stopWorkers();
+      playersNote = `선수 번호를 찾지 못함(${err.message})`;
+    }
+  }
+  finish();
+  let result;
+  if (two) {
+    const [a, b] = res;
     const shift = (sh) => ({ ...sh, start: sh.start + off, end: sh.end + off, made_t: sh.made_t == null ? null : sh.made_t + off });
     result = {
       shots: [...a.shots.map((sh) => ({ ...sh, cam: 'A' })), ...b.shots.map((sh) => ({ ...shift(sh), cam: 'B' }))],
@@ -350,11 +464,13 @@ async function runAnalysis() {
       : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라에서는 파울을 자동으로 가리지 않음)`;
   const vis = res.map((r, i) => `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`).join(', ');
   status(`분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
-    + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote} 다음은 '빠른 검토'.`);
+    + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
   if (res.some((r) => r.visibility['없음'] > 0.7)) alert("골대를 거의 찾지 못한 영상이 있습니다. 다른 체육관이나 다른 카메라 위치라면 '새로 만들기'로 체육관 설정을 새로 만들어 주세요.");
   changed();
 }
 $('runBtn').addEventListener('click', runAnalysis);
+$('auto_players').checked = lsGet('hoopstat.autoPlayers', true) !== false;
+$('auto_players').addEventListener('change', () => lsSet('hoopstat.autoPlayers', $('auto_players').checked));
 function finish() {
   $('runBtn').disabled = false; $('cancelBtn').disabled = true;
 }
@@ -372,7 +488,7 @@ function render() {
     if (e.id === S.selId) tr.className = 'sel';
     const src = cell(''); const pill = document.createElement('span');
     pill.className = `pill ${e.source === '자동' ? 'auto' : 'manual'}`; pill.textContent = e.source || '수동'; src.append(pill);
-    tr.append(cell(Number(e.time).toFixed(1)), cell(e.team), cell(e.player), cell(e.type), cell(e.detail),
+    tr.append(cell(Number(e.time).toFixed(1)), cell(e.team), cell(e.playerAuto && e.player ? `${e.player} (자동)` : e.player), cell(e.type), cell(e.detail),
       cell(e.result, e.result === '성공' ? 'made' : ''), src, cell(e.confidence), cell(e.note, 'note'));
     return tr;
   }));
@@ -487,6 +603,7 @@ $('eventDlg').addEventListener('close', () => {
   const e = { ...base, id: base.id || uid(), time: Math.round(t * 10) / 10, team: $('evTeam').value, player: $('evPlayer').value.trim(), type: $('evType').value,
     detail: $('evDetail').value, result: $('evResult').disabled ? '' : $('evResult').value, note: $('evNote').value.trim(), source: '수동',
     confidence: base.confidence || '', derived: false, checked: true };
+  e.playerAuto = !!base.playerAuto && e.player === base.player;
   if (base.time != null && Math.abs(base.time - e.time) > 0.05) delete e.end;      // the old end no longer fits
   if (i < 0) S.events.push(e); else S.events[i] = e;
   S.selId = e.id;
@@ -508,8 +625,8 @@ $('delBtn').addEventListener('click', () => {
 /* ------------------------------------------------------------------ scene viewer + quick review */
 const NO_PLAYER = new Set(['휘슬']);
 const isShot = (e) => e.type === '야투' || e.type === '자유투';
-/** still to do in the quick review: an automatic shot nobody confirmed, or a record without a jersey number */
-const needsReview = (e) => e.type === '휘슬' || (e.team && !NO_PLAYER.has(e.type) && ((isShot(e) && e.source === '자동' && !e.checked) || !(e.player || '').trim()));
+/** still to do in the quick review: an automatic shot nobody confirmed (unless its shooter's number was read automatically), or a record without a jersey number */
+const needsReview = (e) => e.type === '휘슬' || (e.team && !NO_PLAYER.has(e.type) && ((isShot(e) && e.source === '자동' && !e.checked && !e.playerAuto) || !(e.player || '').trim()));
 function rosterOf(team) {
   const s = settings(), [a, b] = teams();
   const raw = team === a ? s.roster_left : team === b ? s.roster_right : '';
@@ -599,7 +716,7 @@ function setResult(result) {
 function setNumber(p) {
   const e = S.events.find((x) => x.id === S.selId);
   if (!e) return;
-  e.player = String(p).trim();
+  e.player = String(p).trim(); e.playerAuto = false;
   if (isShot(e) && !e.checked) Object.assign(e, { checked: true, confidence: '확인' });   // a number means the result shown was accepted
   changed();
   reviewNext(e.id);

@@ -241,10 +241,12 @@
 
     const ev = [];
     const add = (o) => { const e = { player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', ...o, time: r1(o.time) }; ev.push(e); return e; };
+    // the shooter's number when the players stage read it (see players.js)
+    const shooter = (sh) => (sh.player ? { player: sh.player, playerAuto: !!sh.playerAuto } : {});
     const whistleText = (w) => `${w.t.toFixed(1)}초 휘슬(${w.dur.toFixed(1)}초간) 뒤 선수들이 멈춤`;
     const fgEvent = (sh, extra = '') => add({
       time: sh.start, end: r1(sh.end), team: teamOf(sh.side, sh.start), type: '야투', detail: '2점', result: sh.made ? '성공' : '실패',
-      confidence: sh.confidence, side: sh.side, cam: sh.cam,
+      confidence: sh.confidence, side: sh.side, cam: sh.cam, ...shooter(sh),
       note: '공이 림 높이에 처음 보인 시각(슛을 던진 순간보다 0.3~1초 늦음)'
         + (sh.made && sh.made_t != null ? `. 성공 근거: ${sh.made_t.toFixed(1)}초에 공이 그물 안으로 떨어짐` : '') + extra,
     });
@@ -256,7 +258,7 @@
         note: `${whistleText(w)}, ${ft.start.toFixed(1)}초에 같은 골대에서 선수들이 선 채로 슛 1개 → 슈팅 파울과 자유투로 판단.`
           + (fg ? (andOne ? ' 슛이 들어가 앤드원.' : ` ${fg.start.toFixed(1)}초의 실패한 슛은 야투 시도로 세지 않음(FIBA).`) : '') });
       const detail = andOne ? '앤드원' : '2점슛 파울';
-      add({ time: ft.start, end: r1(ft.end), team, type: '자유투', detail, result: ft.made ? '성공' : '실패', side: ft.side, cam: ft.cam,
+      add({ time: ft.start, end: r1(ft.end), team, type: '자유투', detail, result: ft.made ? '성공' : '실패', side: ft.side, cam: ft.cam, ...shooter(ft),
         note: `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 선수들이 서 있는 가운데 던진 슛(직전 움직임 ${Math.round(still * 100)}%) → 자유투. 팀 규칙: 자유투 1개`
           + (andOne ? ', 앤드원은 성공 시 1점.' : ", 성공 시 2점. 3점슛을 던지다 당한 파울이면 세부를 '3점슛 파울'로 바꾸면 3점.") });
     }
