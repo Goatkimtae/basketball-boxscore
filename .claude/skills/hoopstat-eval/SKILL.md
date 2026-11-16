@@ -45,3 +45,4 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - 연습 슛 빼기(`Flow.splitPractice`): 시험 경기 엔진 슛 41개 중 1개 뺌(눈으로 확인: 연습), 실제 슛 0개 손실. 사용자 내보내기 72개 중 20개 해당(0.2초 칸 최댓값, 75% 기준). 앞뒤 프레임이 반복되는 영상(120fps 시간축)에서도 같은 결과, 6개 눈으로 확인 모두 연습
 - 골대 클릭 민감도: `node harness/e2e.js hvn --clips left150,right150 --no-players --rim-offset 0,12` — 바른 클릭 13개, 12px 어긋나면 4~5개
 - 사람 위치: `node research/on-court/scan.js <key> --fps 2` 두 카메라 → `analyse.js --user <내보내기 사건 json>`, `motion-check.js`
+- 앱 전체 v9(브라우저, 8분 경기): 슛 41개, 번호 읽음 9(확인 8개 모두 맞음), 추정 23(정답 아는 12개 중 6개), 리바운드 팀 9/11·번호 3/9, 연습으로 뺀 슛 0, 1단계 5분 51초 + 2단계 5분 53초, 오류 없음
