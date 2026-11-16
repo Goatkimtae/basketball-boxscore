@@ -423,10 +423,12 @@ function gatherIndex(pts, shot) {
   }
   return g;
 }
-/** adds shot.gather {t, x, y, rimW} and shot.ball [[t, x, y], ...] around it (PROC_W coordinates) */
+/** adds shot.hoop {x, y: rim, w: rim width}, shot.gather {t, x, y, rimW} and shot.ball [[t, x, y], ...] around it (PROC_W coordinates) */
 function addGathers(shots, kept, fps) {
   const byFrame = ballIndex(kept, fps);
   for (const s of shots) {
+    const d0 = kept.find((d) => d.side === s.side && Math.abs(d.t - s.start) < 0.05);
+    if (d0) s.hoop = { x: Math.round(d0.hx * 10) / 10, y: Math.round(d0.rim_y * 10) / 10, w: Math.round(((SHOOTER.R * d0.w) / HS.TW) * 10) / 10 };
     const pts = shooterBall(s, kept, byFrame, fps);
     if (!pts.length) continue;
     const g = pts[gatherIndex(pts, s)];

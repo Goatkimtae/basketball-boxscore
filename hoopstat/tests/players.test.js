@@ -73,3 +73,26 @@ test('colour of a group: Lab to sRGB', () => {
   assert.strictEqual(P.labToHex([0, 128, 128]), '#000000');
   assert.match(P.labToHex([40, 132, 118]), /^#2[0-9a-f]2[0-9a-f]3[0-9a-f]$/);
 });
+
+test('best guess: the look nearest a number\'s profile wins, a read of the number weighs in, nothing to go on gives none', () => {
+  const look = (shorts) => [40, 132, 118, ...shorts, 60, 128, 128, 30, 128, 128];
+  const prof = { 9: { look: look([60, 140, 100]), seen: 5 }, 13: { look: look([30, 128, 128]), seen: 5 } };   // 9: blue shorts, 13: black
+  assert.strictEqual(P.guessNumber(look([58, 141, 102]), [], ['9', '13'], prof).number, '9');
+  assert.strictEqual(P.guessNumber(look([32, 128, 127]), [], ['9', '13'], prof).number, '13');
+  assert.strictEqual(P.guessNumber(look([45, 134, 115]), [[1, '9', 0.95], [2, '9', 0.9]], ['9', '13'], prof).number, '9', 'two reads of 9 tip a look in between');
+  assert.strictEqual(P.guessNumber(null, [], ['9', '13'], prof), null);
+  assert.strictEqual(P.guessNumber(null, [[1, '3', 0.9]], ['9', '13'], prof).number, '13', 'a single digit of 13 counts a little');
+});
+
+test('the rebound gets the number found for the team the play-flow rules give it, marked as a guess when guessed', () => {
+  const S = { team_left: '흰색', team_right: '남색' };
+  const miss = { start: 10, end: 11, side: '오른쪽', frames: 20, made: false, made_t: null, confidence: '보통', reb: { 흰색: { number: '9', guess: true }, 남색: { number: '44', guess: false } } };
+  const later = { start: 40, end: 41, side: '왼쪽', frames: 20, made: false, made_t: null, confidence: '보통' };
+  const r = Flow.infer({ shots: [miss, later], track: [[0, 2, 300, 40], [30, 1, 300, 40], [45, 1, 300, 40]] }, S);
+  const reb = r.events.find((e) => e.type === '리바운드' && e.time < 20);
+  assert.deepStrictEqual([reb.team, reb.detail, reb.player, reb.playerGuess], ['흰색', '수비', '9', true]);
+  const quick = { start: 13, end: 14, side: '오른쪽', frames: 20, made: true, made_t: 13.5, confidence: '보통' };
+  const r2 = Flow.infer({ shots: [miss, quick], track: [[0, 2, 300, 40], [20, 2, 300, 40]] }, S);
+  const oreb = r2.events.find((e) => e.type === '리바운드');
+  assert.deepStrictEqual([oreb.team, oreb.detail, oreb.player, oreb.playerGuess], ['남색', '공격', '44', false]);
+});

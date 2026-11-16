@@ -1,0 +1,173 @@
+{
+ "note": "2026-11-14 game, right-hoop camera. Rebounder of each missed shot as seen by eye in harness/strips.js pictures (0.2-2.0 s after the shot). rebounder null = number not visible; team null = not visible. sure=false: probable. Team colours: navy 11 16 28 44 77, white 0 9 13 33 69.",
+ "rebounds": [
+  {
+   "cam": "R",
+   "k": 1,
+   "shot_start": 28.277,
+   "shot_end": 29.636,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": null,
+   "team": "white",
+   "sure": false,
+   "note": "ball goes off to the left; white players run up the court; holder not visible"
+  },
+  {
+   "cam": "R",
+   "k": 2,
+   "shot_start": 84.34,
+   "shot_end": 84.474,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "13",
+   "team": "white",
+   "sure": false,
+   "note": "white #13 takes the next shot 0.9 s later"
+  },
+  {
+   "cam": "R",
+   "k": 3,
+   "shot_start": 85.407,
+   "shot_end": 86.44,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "9",
+   "team": "white",
+   "sure": true,
+   "note": "#9 (blue shorts) jumps with the ball at the rim 0.2 s after"
+  },
+  {
+   "cam": "R",
+   "k": 4,
+   "shot_start": 121.61,
+   "shot_end": 122.977,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": null,
+   "team": null,
+   "sure": false,
+   "note": "scramble under the rim, holder not visible"
+  },
+  {
+   "cam": "R",
+   "k": 5,
+   "shot_start": 161.555,
+   "shot_end": 163.913,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "33",
+   "team": "white",
+   "sure": false,
+   "note": "white player in front of #77 holds the ball 0.2-1.1 s after; #33 most likely"
+  },
+  {
+   "cam": "R",
+   "k": 6,
+   "shot_start": 175.548,
+   "shot_end": 177.248,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "9",
+   "team": "white",
+   "sure": true,
+   "note": "#9 jumps and holds the ball high 0.2-0.5 s after"
+  },
+  {
+   "cam": "R",
+   "k": 7,
+   "shot_start": 192.858,
+   "shot_end": 193.791,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": null,
+   "team": null,
+   "sure": false,
+   "note": "#11 tips his own miss; who gets it is not visible"
+  },
+  {
+   "cam": "R",
+   "k": 8,
+   "shot_start": 226.085,
+   "shot_end": 227.119,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "9",
+   "team": "white",
+   "sure": false,
+   "note": "#9 (blue shorts) holds the ball at the chest 0.5 s after"
+  },
+  {
+   "cam": "R",
+   "k": 10,
+   "shot_start": 317.693,
+   "shot_end": 318.493,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": null,
+   "team": "navy",
+   "sure": false,
+   "note": "navy player with red shorts grabs it and shoots again 0.9 s later (number not visible)"
+  },
+  {
+   "cam": "R",
+   "k": 12,
+   "shot_start": 372.764,
+   "shot_end": 374.131,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": null,
+   "team": null,
+   "sure": false,
+   "note": "scramble, ball on the floor"
+  },
+  {
+   "cam": "R",
+   "k": 13,
+   "shot_start": 434.736,
+   "shot_end": 435.536,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "9",
+   "team": "white",
+   "sure": false,
+   "note": "#9 jumps with the ball at the rim 0.2 s after"
+  },
+  {
+   "cam": "R",
+   "k": 15,
+   "shot_start": 480.381,
+   "shot_end": 480.648,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "44",
+   "team": "navy",
+   "sure": false,
+   "note": "#44 takes the next shot 1.2 s later"
+  },
+  {
+   "cam": "R",
+   "k": 16,
+   "shot_start": 481.773,
+   "shot_end": 482.04,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "28",
+   "team": "navy",
+   "sure": false,
+   "note": "navy player holds it low 0.8 s after and #28 shoots 2.2 s later"
+  },
+  {
+   "cam": "R",
+   "k": 17,
+   "shot_start": 484.207,
+   "shot_end": 485.707,
+   "hoop_x": 623.0,
+   "rim_y": 169.0,
+   "rebounder": "44",
+   "team": "navy",
+   "sure": false,
+   "note": "#44 holds the ball 0.8-1.1 s after"
+  }
+ ]
+}

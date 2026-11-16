@@ -1,6 +1,6 @@
 /* Offline cache for the app shell and the analysis libraries. Bump VERSION on every release.
    The players-stage models (vendor/models, vendor/ort-*) are cached the first time they are used. */
-const VERSION = 'hoopstat-v7';
+const VERSION = 'hoopstat-v8';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'stats.js', 'flow.js', 'sync.js', 'export.js', 'engine.js', 'demux.js', 'worker.js', 'players.js', '사용법.html',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png',
   'vendor/opencv.js', 'vendor/mp4box.all.min.js', 'vendor/xlsx.full.min.js'];

@@ -26,6 +26,8 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - 엔진: `harness/baselines/*.json` (hvn-left 23슛, hvn-right 18슛, band-sample 8, band-foul 24)
 - 선수 단계(Node, 라벨 gather): 팀 명단 10명 중 9명(흰 팀 0번 빠짐), 공격 방향 맞음, 라벨 20개 중 자동 7(맞음 7, 틀림 0)
 - 앱 전체(브라우저, 8분 경기 VP9): 슛 43개 중 13개 자동, 확인 가능 10개 중 맞음 9·틀림 1, 1단계 13분 + 2단계 5분 30초(4코어, 소프트웨어 해석)
+- 추정(외형): 번호 못 읽은 라벨 슛 13개 중 4개 맞음. 리바운드(오른쪽 카메라 라벨 14개, `research/rebounds/data/rebounds.json`): 팀 9/11, 선수 2/9
+- 리바운드 측정: `node harness/players-run.js hvn-right --no-shots --no-people --rebounds` 후 `players-score.js hvn`
 
 ## 결과 읽을 때
 - 라벨의 `sure:false`(표시 "?")는 사람이 눈으로 봐도 애매했던 것. 확실한 라벨만의 숫자도 같이 보고.

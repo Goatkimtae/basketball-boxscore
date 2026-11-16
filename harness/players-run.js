@@ -1,10 +1,11 @@
 /* The app's players stage (hoopstat/players.js) in Node on one camera's video, full resolution.
 
-     node harness/players-run.js <video key> [--gathers labels|engine] [--no-people] [--no-shots] [--limit N]
+     node harness/players-run.js <video key> [--gathers labels|engine] [--no-people] [--no-shots] [--limit N] [--rebounds]
 
    --gathers labels  shot moments from the hand-labelled shots (research/jersey-numbers/data/shots.json, the
                      video's "camera" L/R in config) - compares like with like across changes (default when labelled)
    --gathers engine  shot moments the engine found (_workspace/engine/<key>.json, run engine-run.js first)
+   --rebounds        also the rebounder of each missed shot (labelled rebounds, or the engine's misses)
    Writes _workspace/players/<key>.json: {shots: [{id, label, number, gap, runReads, reads, lab, secs}], people: [...]}. */
 'use strict';
 const path = require('path');
@@ -35,6 +36,25 @@ async function run(v, opt = {}) {
       if (opt.log) opt.log(`${r.id} label ${s.label ?? '-'} -> ${r.number ?? '-'} (gap ${r.gap ?? '-'}, ${r.reads.length} reads, ${out.shots[out.shots.length - 1].secs}s)`);
     }
   }
+  if (opt.rebounds) {
+    // missed shots: the labelled rebounds (research/rebounds/data/rebounds.json) or the engine's misses
+    let list;
+    if ((opt.gathers || (v.camera ? 'labels' : 'engine')) === 'labels') {
+      const f = require('path').join(H.ROOT, 'research/rebounds/data/rebounds.json');
+      list = require('fs').existsSync(f) ? H.load(f).rebounds.filter((r) => r.cam === v.camera).map((r) => ({ id: `${r.cam}${r.k}`, end: r.shot_end, x: r.hoop_x, y: r.rim_y, rimW: 22, label: r.rebounder, team: r.team, sure: r.sure })) : [];
+    } else {
+      list = H.load(H.out('engine', `${v.key}.json`)).shots.filter((s) => !s.made && s.hoop)
+        .map((s, k) => ({ id: `${v.key}:${k}`, end: s.end, x: s.hoop.x, y: s.hoop.y, rimW: s.hoop.w || 22, label: null }));
+    }
+    out.rebounds = [];
+    for (const m of list) {
+      const t0 = Date.now(), w = new P.ReboundWindow(m, W, h, 768);
+      for (const fr of H.grab(v.path, { t0: w.t0, dur: w.t1 - w.t0, fps: P.PL.FPS }).frames) { const mm = toMat(fr); await w.push(mm, detector); mm.delete(); }
+      const r = await w.finish(reader);
+      out.rebounds.push({ ...r, end: m.end, label: m.label, team: m.team, sure: m.sure, secs: Math.round((Date.now() - t0) / 100) / 10 });
+      if (opt.log) opt.log(`rebound ${r.id} label ${m.label ?? '-'}/${m.team ?? '-'} -> ${r.number ?? '-'} (${r.reads.length} reads, look ${r.look ? 'yes' : 'no'}, ${out.rebounds[out.rebounds.length - 1].secs}s)`);
+    }
+  }
   if (opt.people !== false) {
     for (let t = 0; t < duration; t += P.PL.PEOPLE_EVERY) {
       const [fr] = H.grab(v.path, { t0: t, frames: 1 }).frames;
@@ -52,7 +72,11 @@ if (require.main === module) {
   const a = H.args();
   if (!a._[0]) { console.error('usage: node harness/players-run.js <video key> [--gathers labels|engine] [--no-people] [--no-shots]'); process.exit(2); }
   const v = H.video(a._[0]), t0 = Date.now();
-  run(v, { gathers: a.gathers, people: !a['no-people'], shots: !a['no-shots'], limit: a.limit, log: (m) => console.log(m) }).then((r) => {
+  run(v, { gathers: a.gathers, people: !a['no-people'], shots: !a['no-shots'], limit: a.limit, rebounds: a.rebounds, log: (m) => console.log(m) }).then((r) => {
+    const prev = require('fs').existsSync(H.out('players', `${v.key}.json`)) ? H.load(H.out('players', `${v.key}.json`)) : {};
+    if (a['no-shots'] && prev.shots) r.shots = prev.shots;
+    if (a['no-people'] && prev.people) r.people = prev.people;
+    if (!a.rebounds && prev.rebounds) r.rebounds = prev.rebounds;
     const file = H.save(H.out('players', `${v.key}.json`), r);
     console.log(`${v.key}: ${r.shots.length} shots, ${r.people.length} people, ${Math.round((Date.now() - t0) / 1000)}s -> ${path.relative(H.ROOT, file)}`);
   }).catch((e) => { console.error(e.stack || e); process.exit(1); });

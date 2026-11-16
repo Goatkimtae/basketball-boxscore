@@ -166,6 +166,11 @@
         note: `같은 팀의 다음 슛까지 ${Math.round(gap)}초 → 상대가 잡아 반대쪽으로 갔다 온 것으로 추정(고정 카메라라 공의 이동은 보이지 않음)` };
     }
 
+    // the rebounder's number the players stage found for that team (put-back shooter, read, or best guess)
+    const withPlayer = (e, reb) => {
+      const r = e.reb && e.reb[reb.team];
+      return r && r.number ? { ...reb, player: r.number, playerAuto: true, playerGuess: !!r.guess } : reb;
+    };
     for (const e of base) {
       const T = e.team;
       if (!T) continue;
@@ -177,7 +182,7 @@
         if (base.some((f) => f.type === '파울' && f.time >= e.time - 0.5 && f.time <= Math.min(endOf(e) + P.DEAD_AFTER - 1, tNext))) { have(T, e.time); continue; }
         // a rebound the user entered for this miss stands
         if (base.some((f) => f.type === '리바운드' && f.time >= e.time - 0.2 && f.time < tNext && f !== e)) continue;
-        const reb = rebound(e, T, next);
+        const reb = withPlayer(e, rebound(e, T, next));
         add(reb);
         have(reb.team, reb.time);
       } else if (e.type === '파울' || e.type === '턴오버') have(other(T), e.time);
@@ -198,7 +203,7 @@
       if (k < 0) continue;
       const o = old.splice(k, 1)[0];
       if (o.id) d.id = o.id;
-      if ((o.player || '').trim()) d.player = o.player;
+      if ((o.player || '').trim() && !(o.playerAuto && d.playerAuto)) { d.player = o.player; d.playerAuto = !!o.playerAuto; d.playerGuess = !!o.playerGuess; }
     }
     return [...base, ...derived].sort((a, b) => a.time - b.time);
   }
@@ -242,7 +247,7 @@
     const ev = [];
     const add = (o) => { const e = { player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', ...o, time: r1(o.time) }; ev.push(e); return e; };
     // the shooter's number when the players stage read it (see players.js)
-    const shooter = (sh) => (sh.player ? { player: sh.player, playerAuto: !!sh.playerAuto } : {});
+    const shooter = (sh) => ({ ...(sh.player ? { player: sh.player, playerAuto: !!sh.playerAuto, playerGuess: !!sh.playerGuess } : {}), ...(sh.reb ? { reb: sh.reb } : {}) });
     const whistleText = (w) => `${w.t.toFixed(1)}초 휘슬(${w.dur.toFixed(1)}초간) 뒤 선수들이 멈춤`;
     const fgEvent = (sh, extra = '') => add({
       time: sh.start, end: r1(sh.end), team: teamOf(sh.side, sh.start), type: '야투', detail: '2점', result: sh.made ? '성공' : '실패',

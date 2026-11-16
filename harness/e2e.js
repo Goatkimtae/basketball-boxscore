@@ -95,7 +95,9 @@ if (require.main === module) {
     const shots = log.records.filter((r) => r[3] === '야투' || r[3] === '자유투');
     console.log(`STATUS (${log.seconds}s): ${log.status}`);
     console.log('fields:', JSON.stringify(log.fields));
-    console.log(`shots ${shots.length}, with an automatic number ${shots.filter((r) => /\(자동\)/.test(r[2])).length}; review left ${log.reviewLeft}`);
+    const rebs = log.records.filter((r) => r[3] === '리바운드');
+    const n = (list, re) => list.filter((r) => re.test(r[2])).length;
+    console.log(`shots ${shots.length}: number read ${n(shots, /\(자동\)/)}, guessed ${n(shots, /\(추정\)/)}; rebounds ${rebs.length}: number read ${n(rebs, /\(자동\)/)}, guessed ${n(rebs, /\(추정\)/)}; review left ${log.reviewLeft}`);
     console.log('errors:', log.errors.length ? log.errors.join('\n') : 'none');
     console.log('->', path.relative(H.ROOT, file));
     process.exit(log.errors.length ? 1 : 0);

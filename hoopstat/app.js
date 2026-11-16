@@ -323,10 +323,12 @@ async function findPlayers(jobs, res, off, onProgress) {
   const per = (navigator.hardwareConcurrency || 4) >= 8 ? 2 : 1, tasks = [];
   jobs.forEach((j, vi) => {
     const shots = res[vi].shots.map((sh, k) => (sh.gather ? { id: `${j.cam}:${k}`, t: sh.gather.t, x: sh.gather.x, y: sh.gather.y, rimW: sh.gather.rimW, ball: sh.ball || [] } : null)).filter(Boolean);
+    // missed shots: who has the ball after it (the rebounder)
+    const misses = res[vi].shots.map((sh, k) => (!sh.made && sh.hoop ? { id: `${j.cam}:${k}`, end: sh.end, x: sh.hoop.x, y: sh.hoop.y, rimW: sh.hoop.w } : null)).filter(Boolean);
     const dur = res[vi].duration || S.vids[j.cam].duration || 0;
+    const part = (list, p) => list.filter((_, k) => Math.floor((k * per) / Math.max(1, list.length)) === p);
     for (let p = 0; p < per; p++) {
-      tasks.push({ cmd: 'players', file: j.file, procW: PROC_W, people: [(p * dur) / per, ((p + 1) * dur) / per],
-        shots: shots.filter((_, k) => Math.floor((k * per) / Math.max(1, shots.length)) === p) });
+      tasks.push({ cmd: 'players', file: j.file, procW: PROC_W, people: [(p * dur) / per, ((p + 1) * dur) / per], shots: part(shots, p), rebounds: part(misses, p) });
     }
   });
   // fetch the models once here, so the workers find them in the cache instead of each downloading them
@@ -334,13 +336,15 @@ async function findPlayers(jobs, res, off, onProgress) {
     .map((u) => fetch(u).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null)));
   const fr = tasks.map(() => 0);
   const out = await Promise.all(tasks.map((t, i) => runWorker('players.js', t, (m) => { fr[i] = m.frac; onProgress(fr.reduce((a, b) => a + b, 0) / fr.length); })));
-  const byId = new Map(out.flatMap((r) => r.shots).map((x) => [x.id, x]));
+  const results = out.flatMap((r) => r.shots);
+  const byId = new Map(results.filter((x) => x.kind !== 'rebound').map((x) => [x.id, x]));
+  const rebById = new Map(results.filter((x) => x.kind === 'rebound').map((x) => [x.id, x]));
   const found = Players.findTeams(out.flatMap((r) => r.people));
   const clock = (cam, t) => t + (cam === 'B' ? off : 0);
   const shotList = [];
   jobs.forEach((j, vi) => res[vi].shots.forEach((sh, k) => {
-    const r = byId.get(`${j.cam}:${k}`);
-    if (r) shotList.push({ sh, cam: j.cam, r, side: sh.side, t: clock(j.cam, sh.start), lab: r.lab, number: r.number });
+    const r = byId.get(`${j.cam}:${k}`) || { reads: [], look: null, lab: null, number: null };
+    shotList.push({ sh, cam: j.cam, k, vi, r, reb: rebById.get(`${j.cam}:${k}`), side: sh.side, t: clock(j.cam, sh.start), lab: r.lab, number: r.number });
   }));
   const notes = [];
   const dir = found ? Players.attackDirection(found, shotList, settings().switch_time) : null;
@@ -367,13 +371,33 @@ async function findPlayers(jobs, res, off, onProgress) {
   } else {
     notes.push(found ? '공격 방향을 셔츠 색으로 가리지 못함(슛이 적거나 섞임)' : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
   }
-  let auto = 0;
+  // shooters: a number read surely and on the attacking team's list; otherwise (when allowed) the most likely number of that list
+  const guessing = $('auto_guess').checked;
+  const prof = Players.lookProfiles(out.flatMap((r) => r.people), [...rosterList(teams()[0]), ...rosterList(teams()[1])]);
+  let auto = 0, guessed = 0;
   for (const x of shotList) {
-    if (!x.number) continue;
-    const team = Stats.teamFor(x.side, x.t, settings());
-    if (rosterList(team).includes(x.number)) { x.sh.player = x.number; x.sh.playerAuto = true; auto++; }
+    const team = Stats.teamFor(x.side, x.t, settings()), list = rosterList(team);
+    if (x.number && list.includes(x.number)) { Object.assign(x.sh, { player: x.number, playerAuto: true, playerGuess: false }); auto++; continue; }
+    const g = guessing ? Players.guessNumber(x.r.look, x.r.reads, list, prof) : null;
+    if (g) { Object.assign(x.sh, { player: g.number, playerAuto: true, playerGuess: true }); guessed++; }
   }
-  notes.push(`슛 ${shotList.length}개 중 ${auto}개의 슈터 번호를 자동으로 넣음`);
+  // rebounders, for each team (play flow decides which team got the ball): the shooter of a put-back within 3 s,
+  // else a number read surely on the person under the hoop, else (when allowed) the most likely number
+  let rebs = 0;
+  for (const x of shotList) {
+    if (x.sh.made) continue;
+    const reb = {};
+    const next = shotList.find((y) => y.vi === x.vi && y.side === x.side && y.sh.start > x.sh.end && y.sh.start <= x.sh.end + 3);
+    for (const team of teams()) {
+      const list = rosterList(team);
+      if (next && next.sh.player && Stats.teamFor(next.side, next.t, settings()) === team) { reb[team] = { number: next.sh.player, guess: !!next.sh.playerGuess, how: '연속 슛' }; continue; }
+      if (x.reb && x.reb.number && list.includes(x.reb.number)) { reb[team] = { number: x.reb.number, guess: false, how: '번호 읽음' }; continue; }
+      const g = guessing && x.reb ? Players.guessNumber(x.reb.look, x.reb.reads, list, prof) : null;
+      if (g) reb[team] = { number: g.number, guess: true, how: '추정' };
+    }
+    if (Object.keys(reb).length) { x.sh.reb = reb; rebs++; }
+  }
+  notes.push(`슛 ${shotList.length}개 중 ${auto}개의 슈터 번호를 읽어서 넣음` + (guessing ? `, ${guessed}개는 추정해서 넣음` : '') + `, 실패한 슛 ${shotList.filter((x) => !x.sh.made).length}개 중 ${rebs}개의 리바운드 선수를 찾음`);
   save();
   return notes.join(' · ');
 }
@@ -471,6 +495,8 @@ async function runAnalysis() {
 $('runBtn').addEventListener('click', runAnalysis);
 $('auto_players').checked = lsGet('hoopstat.autoPlayers', true) !== false;
 $('auto_players').addEventListener('change', () => lsSet('hoopstat.autoPlayers', $('auto_players').checked));
+$('auto_guess').checked = lsGet('hoopstat.autoGuess', true) !== false;
+$('auto_guess').addEventListener('change', () => lsSet('hoopstat.autoGuess', $('auto_guess').checked));
 function finish() {
   $('runBtn').disabled = false; $('cancelBtn').disabled = true;
 }
@@ -488,7 +514,7 @@ function render() {
     if (e.id === S.selId) tr.className = 'sel';
     const src = cell(''); const pill = document.createElement('span');
     pill.className = `pill ${e.source === '자동' ? 'auto' : 'manual'}`; pill.textContent = e.source || '수동'; src.append(pill);
-    tr.append(cell(Number(e.time).toFixed(1)), cell(e.team), cell(e.playerAuto && e.player ? `${e.player} (자동)` : e.player), cell(e.type), cell(e.detail),
+    tr.append(cell(Number(e.time).toFixed(1)), cell(e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
       cell(e.result, e.result === '성공' ? 'made' : ''), src, cell(e.confidence), cell(e.note, 'note'));
     return tr;
   }));
@@ -604,6 +630,7 @@ $('eventDlg').addEventListener('close', () => {
     detail: $('evDetail').value, result: $('evResult').disabled ? '' : $('evResult').value, note: $('evNote').value.trim(), source: '수동',
     confidence: base.confidence || '', derived: false, checked: true };
   e.playerAuto = !!base.playerAuto && e.player === base.player;
+  e.playerGuess = e.playerAuto && !!base.playerGuess;
   if (base.time != null && Math.abs(base.time - e.time) > 0.05) delete e.end;      // the old end no longer fits
   if (i < 0) S.events.push(e); else S.events[i] = e;
   S.selId = e.id;
@@ -716,7 +743,7 @@ function setResult(result) {
 function setNumber(p) {
   const e = S.events.find((x) => x.id === S.selId);
   if (!e) return;
-  e.player = String(p).trim(); e.playerAuto = false;
+  e.player = String(p).trim(); e.playerAuto = false; e.playerGuess = false;
   if (isShot(e) && !e.checked) Object.assign(e, { checked: true, confidence: '확인' });   // a number means the result shown was accepted
   changed();
   reviewNext(e.id);

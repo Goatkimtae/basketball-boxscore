@@ -95,6 +95,35 @@ function shirtOf(rgba, box) {
   return { lab: [median(cnt[0]), median(cnt[1]), median(cnt[2])], hist };
 }
 
+/* What a person looks like apart from the shirt colour the whole team shares: median colour (Lab) of the
+   shirt, the shorts, the shoes and the head (hair, headband). Parts as shares of the person box: [y0, y1, x0, x1]. */
+const LOOK_PARTS = [[0.15, 0.55, 0.2, 0.8], [0.55, 0.78, 0.25, 0.75], [0.9, 1.0, 0.15, 0.85], [0.0, 0.13, 0.3, 0.7]];
+function labMedian(rgba, rect) {
+  const roi = rgba.roi(rect), rgb = new cv.Mat(), lab = new cv.Mat();
+  cv.cvtColor(roi, rgb, cv.COLOR_RGBA2RGB); cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
+  const n = rect.width * rect.height, cnt = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)], L = lab.data;
+  for (let i = 0, j = 0; i < n; i++, j += 3) { cnt[0][L[j]]++; cnt[1][L[j + 1]]++; cnt[2][L[j + 2]]++; }
+  roi.delete(); rgb.delete(); lab.delete();
+  return cnt.map((c) => { let acc = 0; for (let v = 0; v < 256; v++) { acc += c[v]; if (acc * 2 >= n) return v; } return 0; });
+}
+/** 12 numbers (Lab of shirt, shorts, shoes, head) or null when the box is cut by the picture edge */
+function lookOf(rgba, box) {
+  const [x0, y0, x1, y1] = box, w = x1 - x0, h = y1 - y0, out = [];
+  if (x0 < 0 || y0 < 0 || x1 > rgba.cols || y1 > rgba.rows) return null;
+  for (const [a, b, c, d] of LOOK_PARTS) {
+    const rx = Math.trunc(x0 + c * w), ry = Math.trunc(y0 + a * h), rw = Math.trunc((d - c) * w), rh = Math.trunc((b - a) * h);
+    if (rw < 2 || rh < 2) return null;
+    out.push(...labMedian(rgba, new cv.Rect(rx, ry, Math.min(rw, rgba.cols - rx), Math.min(rh, rgba.rows - ry))));
+  }
+  return out;
+}
+/** element-wise median of several looks */
+function medianLook(looks) {
+  const ok = looks.filter(Boolean);
+  if (!ok.length) return null;
+  return ok[0].map((_, i) => { const v = ok.map((l) => l[i]).sort((p, q) => p - q); return v[(v.length - 1) >> 1]; });
+}
+
 /** OpenCV's Bhattacharyya distance between two histograms */
 function bhattacharyya(h1, h2) {
   let s1 = 0, s2 = 0, r = 0;
@@ -392,9 +421,10 @@ function decideNumber(reads, tGather) {
     and the numbers on that person are read. shot: {id, t, x, y, rimW, ball: [[t, x, y]]} in PROC_W coordinates. */
 class ShotWindow {
   constructor(shot, W, H, procW) {
-    this.shot = shot; this.W = W; this.H = H; this.sc = W / procW;
+    this.shot = shot; this.W = W; this.H = H; this.sc = W / procW; this.kind = 'shot';
     this.t0 = Math.max(0, shot.t - PL.BEFORE); this.t1 = shot.t + PL.AFTER;
     this.f = 0; this.tracker = new Tracker(); this.crops = new Map();   // "trackId:f" -> shirt picture
+    this.looks = new Map();                                              // "trackId:f" -> look (see lookOf)
     const R = (shot.rimW || 22) * this.sc;
     this.x0 = Math.trunc(Math.max(0, shot.x * this.sc - PL.CROP_R * R)); this.x1 = Math.trunc(Math.min(W, shot.x * this.sc + PL.CROP_R * R));
   }
@@ -414,17 +444,16 @@ class ShotWindow {
       if (b[3] - b[1] < ocrH) continue;
       const r = torsoRect(b, rgba.cols, rgba.rows);
       if (r) { const roi = rgba.roi(r); this.crops.set(`${t.id}:${this.f}`, roi.clone()); roi.delete(); }
+      this.looks.set(`${t.id}:${this.f}`, lookOf(rgba, b));
     }
     this.f++;
   }
 
-  /** -> {id, number, gap, reads, lab} */
-  async finish(reader) {
-    const s = this.shot, sc = this.sc, all = this.tracker.all();
-    const gf = Math.round((s.t - this.t0) * PL.FPS);
+  /** the person holding the ball: the ball inside the box (with a margin), between head and hips, over the frames around the gather */
+  pick(all) {
+    const s = this.shot, sc = this.sc, gf = Math.round((s.t - this.t0) * PL.FPS);
     let balls = (s.ball || []).map(([bt, bx, by]) => [Math.round((bt - this.t0) * PL.FPS), bx * sc, by * sc]);
     if (!balls.length) balls = [[gf, s.x * sc, s.y * sc]];
-    // the person holding the ball: the ball inside the box (with a margin), between head and hips, over the frames around the gather
     const score = new Map();
     for (const t of all) {
       const ks = [...t.boxes.keys()];
@@ -440,12 +469,20 @@ class ShotWindow {
     }
     let shooter = null, best = -Infinity;
     for (const t of all) if (score.has(t.id) && score.get(t.id) > best) { best = score.get(t.id); shooter = t; }
-    const out = { id: s.id, number: null, gap: null, reads: [], lab: null };
+    return shooter;
+  }
+
+  /** -> {id, kind, number, gap, reads, lab, look}: the picked person's number (read near time shot.t) and look */
+  async finish(reader) {
+    const s = this.shot, all = this.tracker.all(), gf = Math.round((s.t - this.t0) * PL.FPS);
+    const shooter = this.pick(all);
+    const out = { id: s.id, kind: this.kind, number: null, gap: null, reads: [], lab: null, look: null };
     if (shooter) {
       const ks = [...shooter.boxes.keys()].sort((a, b) => a - b);
       let ck = ks[0];
       for (const k of ks) if (Math.abs(k - gf) < Math.abs(ck - gf)) ck = k;
       out.lab = shooter.cols.get(ck) || shooter.col;
+      out.look = medianLook(ks.map((k) => this.looks.get(`${shooter.id}:${k}`)));
       for (let i = 0; i < ks.length; i += 2) {             // every second frame of the shooter
         const img = this.crops.get(`${shooter.id}:${ks[i]}`);
         if (!img) continue;
@@ -466,7 +503,37 @@ class ShotWindow {
     return out;
   }
 
-  close() { for (const m of this.crops.values()) m.delete(); this.crops.clear(); }
+  close() { for (const m of this.crops.values()) m.delete(); this.crops.clear(); this.looks.clear(); }
+}
+
+/** After a missed shot: people under the hoop are followed from 0.3 s before the ball leaves the rim area to
+    2.5 s after; the rebounder is the person who stays nearest the hoop with hands up near rim height in the
+    first 1.5 s (the ball itself is not followed: after a shot the orange-and-moving test finds shoes and shirts too).
+    miss: {id, end, x (hoop centre), y (rim), rimW} in PROC_W coordinates. */
+const REB = { BEFORE: 0.3, AFTER: 2.5, LOOK: 1.5, NEAR: 3, UP: 3, READ_AT: 0.5 };
+class ReboundWindow extends ShotWindow {
+  constructor(miss, W, H, procW) {
+    super({ id: miss.id, t: miss.end + REB.READ_AT, x: miss.x, y: miss.y, rimW: miss.rimW, ball: [] }, W, H, procW);
+    this.kind = 'rebound'; this.miss = miss;
+    this.t0 = Math.max(0, miss.end - REB.BEFORE); this.t1 = miss.end + REB.AFTER;
+  }
+
+  pick(all) {
+    const m = this.miss, sc = this.sc, R = (m.rimW || 22) * sc, hx = m.x * sc, rim = m.y * sc;
+    const f0 = Math.round((m.end - this.t0) * PL.FPS), f1 = Math.round((m.end + REB.LOOK - this.t0) * PL.FPS);
+    let best = null, bestScore = 0;
+    for (const t of all) {
+      let v = 0;
+      for (const [f, [x0, y0, x1]] of t.boxes) {
+        if (f < f0 || f > f1) continue;
+        const near = Math.exp(-((((x0 + x1) / 2 - hx) / (REB.NEAR * R)) ** 2));
+        const up = Math.min(1, Math.max(0, (rim + REB.UP * R - y0) / (REB.UP * R)));
+        v += near * (0.3 + up);
+      }
+      if (v > bestScore) { bestScore = v; best = t; }
+    }
+    return best;
+  }
 }
 
 /** everybody in one picture: [{lab, h, reads: [[text, conf]]}] (people at least OCR_MIN_H tall) */
@@ -477,7 +544,7 @@ async function peopleIn(rgba, detector, reader) {
     if (b.score <= PL.KEEP_SCORE || b.box[3] - b.box[1] < PL.OCR_MIN_H * H) continue;
     const { lab } = shirtOf(rgba, b.box);
     if (!lab) continue;
-    out.push({ lab, h: Math.round(b.box[3] - b.box[1]), reads: await reader.shirtNumbers(rgba, b.box) });
+    out.push({ lab, look: lookOf(rgba, b.box), h: Math.round(b.box[3] - b.box[1]), reads: await reader.shirtNumbers(rgba, b.box) });
   }
   return out;
 }
@@ -565,8 +632,38 @@ function attackDirection(found, shots, switchTime) {
   return { left: score > 0 ? 0 : 1, votes };
 }
 
-if (typeof module !== 'undefined') module.exports = { PL, TEAM, iou, hungarian, torsoRect, shirtOf, bhattacharyya, PersonDetector, Tracker, NumberReader, decideNumber, ShotWindow, peopleIn, kmeans, labToHex, findTeams, attackDirection };
-if (typeof self !== 'undefined' && typeof importScripts !== 'function') Object.assign(self, { Players: { PL, findTeams, attackDirection, decideNumber, labToHex } });
+/* ------------------------------------------------------------------ best guess when no number was read surely */
+/** Each listed number's look: the element-wise median of the people pictures where that number was read surely. */
+function lookProfiles(people, numbers) {
+  const prof = {};
+  for (const n of numbers) {
+    const looks = people.filter((p) => p.look && p.reads.some((r) => r[0] === n && r[1] >= PL.DECIDE_CONF)).map((p) => p.look);
+    if (looks.length) prof[n] = { look: medianLook(looks), seen: looks.length };
+  }
+  return prof;
+}
+const GUESS = { TAU: 15, READ: 2, PART: 0.5, NO_LOOK: 1.5 };
+const LOOK_W = [0.5, 1, 1, 0.5, 1, 1, 0.5, 1, 1, 0.5, 1, 1];
+/** The most likely number among `roster` for a person with this look and these (unsure) reads [[t, text, conf]]:
+    looks closer to a number's profile and reads of that number (a single digit of it counts a little) raise it.
+    Returns {number, p} (p: share among the roster, a rough confidence) or null when there is nothing to go on. */
+function guessNumber(look, reads, roster, prof) {
+  if (!roster.length) return null;
+  const sc = roster.map((n) => {
+    let v = 0;
+    if (look && prof[n]) v -= Math.sqrt(look.reduce((a, x, i) => a + LOOK_W[i] * (x - prof[n].look[i]) ** 2, 0)) / GUESS.TAU;
+    else v -= GUESS.NO_LOOK;
+    for (const [, t, c] of reads || []) { if (t === n) v += GUESS.READ * c; else if (t.length === 1 && n.includes(t)) v += GUESS.PART * c; }
+    return v;
+  });
+  if (!look && !(reads || []).some(([, t]) => roster.some((n) => n === t || (t.length === 1 && n.includes(t))))) return null;
+  const m = Math.max(...sc), e = sc.map((v) => Math.exp(v - m)), z = e.reduce((a, b) => a + b, 0);
+  const i = sc.indexOf(m);
+  return { number: roster[i], p: Math.round((e[i] / z) * 100) / 100 };
+}
+
+if (typeof module !== 'undefined') module.exports = { PL, TEAM, GUESS, REB, ReboundWindow, lookOf, medianLook, lookProfiles, guessNumber, iou, hungarian, torsoRect, shirtOf, bhattacharyya, PersonDetector, Tracker, NumberReader, decideNumber, ShotWindow, peopleIn, kmeans, labToHex, findTeams, attackDirection };
+if (typeof self !== 'undefined' && typeof importScripts !== 'function') Object.assign(self, { Players: { PL, findTeams, attackDirection, decideNumber, labToHex, lookProfiles, guessNumber } });
 
 /* ------------------------------------------------------------------ worker */
 if (typeof importScripts === 'function') {
@@ -595,7 +692,7 @@ if (typeof importScripts === 'function') {
     return undefined;
   };
 
-  /** job: {file, shots: [{id, t, x, y, rimW, ball}] (times in this video), people: true|false, procW} */
+  /** job: {file, shots: [{id, t, x, y, rimW, ball}], rebounds: [{id, end, x, y, rimW}] (times in this video), people: [from, to], procW} */
   async function run(job, post) {
     const { detector, reader } = await ready;
     const m = await Demux.openMp4(MP4Box, job.file.size, (pos, len) => job.file.slice(pos, pos + len).arrayBuffer());
@@ -603,7 +700,8 @@ if (typeof importScripts === 'function') {
     const srcW = track.video.width, srcH = track.video.height, W = rot % 180 ? srcH : srcW, H = rot % 180 ? srcW : srcH;
     const duration = track.duration / track.timescale;
     const config = { codec: track.codec.startsWith('vp08') ? 'vp8' : track.codec, codedWidth: srcW, codedHeight: srcH, description: description(m.mp4.getTrackById(track.id)) };
-    const windows = job.shots.map((s) => new ShotWindow(s, W, H, job.procW)).sort((a, b) => a.t0 - b.t0);
+    const windows = [...job.shots.map((s) => new ShotWindow(s, W, H, job.procW)), ...(job.rebounds || []).map((m) => new ReboundWindow(m, W, H, job.procW))]
+      .sort((a, b) => a.t0 - b.t0);
     let open = [], nextWin = 0, nextPeople = job.people ? 0 : Infinity, nextPeopleDecode = nextPeople;
     const results = [], people = [];
     const canvas = new OffscreenCanvas(W, H), ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -670,7 +768,7 @@ if (typeof importScripts === 'function') {
     }
     decoder.close();
     for (const w of open) results.push(await w.finish(reader));
-    for (const w of windows.slice(nextWin)) { w.close(); results.push({ id: w.shot.id, number: null, gap: null, reads: [], lab: null }); }
+    for (const w of windows.slice(nextWin)) { w.close(); results.push({ id: w.shot.id, kind: w.kind, number: null, gap: null, reads: [], lab: null, look: null }); }
     return { shots: results, people, W, H };
   }
 
