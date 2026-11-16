@@ -25,7 +25,7 @@
 - 비용이 드는 방법(유료 API) 쓰지 않는다. 영상은 사용자 PC 밖으로 보내지 않는다.
 - Windows 보안 설정(스마트 앱 컨트롤 등)을 바꾸게 하지 않는다.
 - 공개 저장소: 경기 영상, 공유 링크, 선수 사진을 커밋하지 않는다.
-- 배포: 테스트 → `hoopstat/sw.js` VERSION 올림 → 커밋 → 작업 브랜치 push → `git push origin <branch>:main` → Actions(테스트, Pages) success 확인.
+- 배포: 테스트 → `hoopstat/sw.js` VERSION과 `app.js` APP_VERSION 같이 올림(테스트가 확인) → 커밋 → 작업 브랜치 push → `git push origin <branch>:main` → Actions(테스트, Pages) success 확인.
 - 정확도 숫자는 하네스로 잰 것만 문서(`hoopstat/사용법.html`)에 쓴다.
 
 ## 알려진 함정
@@ -35,6 +35,7 @@
 - 프레임 버퍼를 조각마다 이어 붙이면 수십 배 느려진다 → 프레임마다 한 번만 이어 붙임(lib.js `stream`).
 - Quick Share 내려받기는 브라우저 User-Agent가 필요하고, 환경 네트워크 허용 호스트 추가가 필요했다.
 - 슛 이후 골대 근처 밖의 '공' 검출은 주황 신발·옷이 많다 → 리바운드에 그대로 쓰지 말 것.
+- 카메라 2대 경기에서 경기가 한쪽 골대에 있을 때 대기 팀(빨간 조끼)이 빈 골대에서 연습한다 → 슛 시각 두 카메라 움직임 비교로 뺌(`Flow.splitPractice`). 사람 수로도 확인됨(`research/on-court/`).
 - 외형(셔츠·반바지·신발·머리 색) 추정은 같은 팀 안에서 거의 구분이 안 된다(슈터 13개 중 4개, 우연 수준 약간 위). 개선하려면 공 소유를 따라가거나 더 나은 사람 재식별이 필요.
 
 ## 변경 이력

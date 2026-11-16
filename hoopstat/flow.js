@@ -41,6 +41,10 @@
     FT_MIN: 4, FT_MAX: 40,       // the free throw comes this long after the whistle
     FT_STILL: 0.4,      // players stand still before a free throw: motion 3-0.7 s before it, share of median
     MARK_DUR: 0.5,      // fixed cameras: whistle-like sounds this long are listed for the user to judge
+    // two fixed cameras: a shot while this camera moves less than PRACTICE x the other one (3 s before to 1 s after)
+    // is someone practising at the empty hoop: the players are at the other end. Checked on one game: practice
+    // 0.00-0.34, game shots 0.63 and up. The other camera must move at least PRACTICE_OTHER (share of its median).
+    PRACTICE: 0.4, PRACTICE_OTHER: 0.45,
   };
   const r1 = (x) => Math.round(x * 10) / 10;
   const isShot = (e) => e.type === '야투' || e.type === '자유투';
@@ -84,6 +88,22 @@
         return n >= 3 ? s / n / med : null;
       },
     };
+  }
+
+  /** Two fixed cameras [{shots, track, offset}]: each camera's shots split into game shots and practice at the
+      empty hoop (much less motion there than at the other end, where the players are). */
+  function splitPractice(cams) {
+    const mos = cams.map((c) => motionOf(c.track, c.offset || 0));
+    return cams.map((c, i) => {
+      const me = mos[i], other = mos[1 - i], game = [], practice = [];
+      for (const sh of c.shots || []) {
+        const t = sh.start + (c.offset || 0);
+        const a = me && me.mean(t - 3, t + 1), b = other && other.mean(t - 3, t + 1);
+        if (a != null && b != null && b >= P.PRACTICE_OTHER && a / b < P.PRACTICE) practice.push({ ...sh, motionRatio: Math.round((a / b) * 100) / 100 });
+        else game.push(sh);
+      }
+      return { game, practice };
+    });
   }
 
   /** Did play stop after this whistle? Every camera that has a picture then must show it. */
@@ -308,7 +328,7 @@
     };
   }
 
-  const Flow = { P, segments, timeOn, motionOf, stopped, dropConflicts, possession, derive, infer };
+  const Flow = { P, segments, timeOn, motionOf, splitPractice, stopped, dropConflicts, possession, derive, infer };
   if (typeof window !== 'undefined') window.Flow = Flow;
   if (typeof module !== 'undefined') module.exports = Flow;
 })(typeof window !== 'undefined' ? window : globalThis);

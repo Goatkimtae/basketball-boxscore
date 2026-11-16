@@ -12,12 +12,12 @@ description: "HoopStat 앱 화면·기록 흐름·문서·배포 담당. app.js(
 - `hoopstat/flow.js` 슛 → 리바운드·턴오버·파울·자유투 추론(infer 한 번, derive 매 수정)
 - `hoopstat/stats.js` 박스스코어, 재분석 병합(mergeReanalysis: 손으로 넣은 번호 유지)
 - `hoopstat/index.html`, `style.css`, `사용법.html`(정확도 표는 evaluator가 잰 숫자만)
-- `hoopstat/sw.js` — 배포마다 `VERSION` 올림. 큰 모델은 처음 쓸 때 캐시(FILES에 넣지 않음)
+- `hoopstat/sw.js` — 배포마다 `VERSION` 올림(`app.js`의 `APP_VERSION`도 같은 값, 테스트가 확인). 큰 모델은 처음 쓸 때 캐시(FILES에 넣지 않음)
 
 ## 배포 순서
 1. `node --test hoopstat/tests/*.test.js` 통과(편집 후 훅이 자동으로 빠른 테스트를 돌림)
 2. 화면 변경이면 `node harness/e2e.js hvn --clips left150,right150`로 오류 없음 확인
-3. `sw.js` VERSION 올림, `사용법.html` 갱신, CLAUDE.md 변경 이력 한 줄
+3. `sw.js` VERSION·`app.js` APP_VERSION 올림, `사용법.html` 갱신, CLAUDE.md 변경 이력 한 줄
 4. 커밋(메시지 끝에 세션이 알려 준 Co-Authored-By/Claude-Session 줄) → 작업 브랜치 push → `git push origin <branch>:main`(Pages가 main을 배포)
 5. GitHub Actions의 '웹 앱 판정 규칙 테스트'와 'pages build and deployment'가 success인지 확인
 

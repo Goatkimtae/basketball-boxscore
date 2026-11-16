@@ -116,3 +116,20 @@ test('re-analysis keeps jersey numbers typed on automatic records', () => {
   const m = Stats.mergeReanalysis(old, auto);
   assert.deepStrictEqual(m.map((e) => [e.time, e.player, e.source]), [[10, '1', '자동'], [30, '', '수동']]);
 });
+
+test('two fixed cameras: a shot at the empty hoop while the players are at the other end is practice', () => {
+  // motion per camera: [t, side, x, motion x1000]; the play is at the left end 0-60 s, then at the right end
+  const tr = (busy) => Array.from({ length: 1200 }, (_, i) => { const t = i / 10; return [t, 1, 0, busy(t) ? 40 : 2]; });
+  const left = tr((t) => t < 60), right = tr((t) => t >= 60);
+  const cams = [{ shots: [shot(20, '왼쪽'), shot(90, '왼쪽')], track: left, offset: 0 },
+    { shots: [shot(30, '오른쪽'), shot(100, '오른쪽')], track: right, offset: 0.5 }];
+  const [a, b] = Flow.splitPractice(cams);
+  assert.deepStrictEqual(a.game.map((s) => s.start), [20]);
+  assert.deepStrictEqual(a.practice.map((s) => s.start), [90]);      // left hoop while the play is at the right end
+  assert.deepStrictEqual(b.game.map((s) => s.start), [100]);
+  assert.deepStrictEqual(b.practice.map((s) => s.start), [30]);
+  // both ends quiet (a dead ball, a free throw): nothing is called practice
+  const quiet = tr(() => false);
+  const [c] = Flow.splitPractice([{ shots: [shot(20, '왼쪽')], track: quiet, offset: 0 }, { shots: [], track: quiet, offset: 0 }]);
+  assert.strictEqual(c.practice.length, 0);
+});

@@ -148,7 +148,7 @@ tr.total td{font-weight:700;border-top:2px solid var(--line)}.scroll.cmp{max-wid
 <section><h2>선수별 기록</h2><p class="note">등번호를 모르는 기록은 '미상'으로 묶었습니다. 맨 아래 줄은 팀 합계입니다. 출전시간(MIN)과 +/-는 교체 기록이 없어 계산하지 않았습니다.</p>${players}${notes ? `<ul>${notes}</ul>` : ''}</section>
 <section><h2>사건 기록</h2><p class="note">시각은 영상 시작부터 센 초입니다. 출처 '자동'은 앱이 찾은 기록, '수동'은 사람이 넣거나 고친 기록입니다.</p>
 <div class="scroll"><table><thead><tr><th>시각(초)</th><th class="l">팀</th><th class="l">등번호</th><th class="l">기록</th><th class="l">세부</th><th class="l">결과</th><th class="l">출처</th><th class="l">비고</th></tr></thead><tbody>${pbp}</tbody></table></div></section>
-<footer>HoopStat으로 만든 기록 · 이 파일 하나로 열립니다.</footer>
+<footer>HoopStat으로 만든 기록 · 이 파일 하나로 열립니다.${s.analysis ? `<br>분석 정보(문제를 알릴 때 이 파일을 보내 주세요): ${esc(s.analysis.version || '')} · ${esc((s.analysis.at || '').slice(0, 16).replace('T', ' '))} UTC · ${esc(s.analysis.mode || '')} · 선수 찾기 ${esc(s.analysis.players || '')} · ${esc(s.analysis.status || '')}` : ''}</footer>
 </main></body></html>`;
 }
 

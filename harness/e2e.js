@@ -1,7 +1,7 @@
 /* The whole app in headless Chromium on a two-camera game: makes the gym profile by clicking the rims,
    runs the analysis (both stages), reads the results back from the page.
 
-     node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "1 2 3|4 5 6"]
+     node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "1 2 3|4 5 6"] [--rim-offset dx,dy]
 
    Headless Chromium has no H.264/HEVC decoder: the clips must be VP9 in MP4 (make them with
    make-clips.sh at full resolution; 768-px clips are too small to read numbers). The page is served by
@@ -62,8 +62,10 @@ async function run(game, opt = {}) {
       await page.mouse.click(box.x + (x * box.width) / cw, box.y + (y * box.height) / ch);
       await page.waitForTimeout(1500);
     };
-    await setT(vl.rimTime); await clickRim(vl.rim);
-    await setT(vr.rimTime); await clickRim(vr.rim);
+    // --rim-offset dx,dy: click beside the rim (how sensitive is the analysis to a careless click?)
+    const [odx, ody] = (opt.rimOffset || '0,0').split(',').map(Number), off = ([x, y]) => [x + odx, y + ody];
+    await setT(vl.rimTime); await clickRim(off(vl.rim));
+    await setT(vr.rimTime); await clickRim(off(vr.rim));
     await page.fill('#pfName', `harness ${game}`); await page.click('#pfSave');
     const t0 = Date.now();
     await page.click('#runBtn');
@@ -90,7 +92,7 @@ async function run(game, opt = {}) {
 if (require.main === module) {
   const a = H.args();
   if (!a._[0]) { console.error('usage: node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "l|r"]'); process.exit(2); }
-  run(a._[0], { clips: a.clips, players: !a['no-players'], names: a.names, rosters: a.rosters, log: (m) => console.log(m) }).then((log) => {
+  run(a._[0], { clips: a.clips, players: !a['no-players'], names: a.names, rosters: a.rosters, rimOffset: a['rim-offset'], log: (m) => console.log(m) }).then((log) => {
     const file = H.save(H.out('e2e', `${a._[0]}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), log);
     const shots = log.records.filter((r) => r[3] === '야투' || r[3] === '자유투');
     console.log(`STATUS (${log.seconds}s): ${log.status}`);

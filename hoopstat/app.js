@@ -36,7 +36,9 @@ function profileTemplates(name) {
 }
 
 /* ------------------------------------------------------------------ settings */
-const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'switch_time', 'cam_offset', 'title'];
+const APP_VERSION = 'hoopstat-v9';   // the same as VERSION in sw.js (a test checks)
+/* ------------------------------------------------------------------ settings (continued) */
+const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
 const twoCam = () => $('cam_mode').value === 'two';
 function settings() {
@@ -49,6 +51,7 @@ function settings() {
   s.video_name_b = S.vids.B.file ? S.vids.B.file.name : S.vids.B.name;
   s.duration = S.vids.A.duration;
   s.flow = S.ctx;
+  s.analysis = S.analysis || null;   // how the last analysis went (app version, status line): saved and exported
   return s;
 }
 function teams() { const s = settings(); return [s.team_left || '팀 A', s.team_right || '팀 B']; }
@@ -348,7 +351,24 @@ async function findPlayers(jobs, res, off, onProgress) {
     shotList.push({ sh, cam: j.cam, k, vi, r, reb: rebById.get(`${j.cam}:${k}`), side: sh.side, t: clock(j.cam, sh.start), lab: r.lab, number: r.number });
   }));
   const notes = [];
-  const dir = found ? Players.attackDirection(found, shotList, settings().switch_time) : null;
+  // each team has this many players (subs included): extra numbers are misreadings or people not in the game
+  const size = parseInt(settings().team_size, 10);
+  if (found && size > 0) {
+    for (const t of found.teams) {
+      if (t.numbers.length <= size) continue;
+      const keep = [...t.numbers].sort((x, y) => (t.seen[y] || 0) - (t.seen[x] || 0)).slice(0, size);
+      t.numbers = t.numbers.filter((n) => keep.includes(n));
+    }
+  }
+  let dir = found ? Players.attackDirection(found, shotList, settings().switch_time) : null, dirHow = '슈터 셔츠 색';
+  if (found && !dir) {
+    // the team colours chosen on the page tell the two teams apart (both must match, else nothing is decided)
+    const [fa, fb] = found.teams.map((t) => colourName(t.lab)), [cl, cr] = [$('color_left').value, $('color_right').value];
+    if (fa !== fb && cl !== cr) {
+      if (fa === cl && fb === cr) dir = { left: 0 }; else if (fa === cr && fb === cl) dir = { left: 1 };
+      if (dir) dirHow = '고른 팀 색';
+    }
+  }
   console.info('[players]', JSON.stringify({ teams: found && found.teams.map((t) => ({ colour: t.colour, numbers: t.numbers, seen: t.seen })),
     others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: dir && dir.votes,
     shots: shotList.map((x) => [x.cam, Math.round(x.sh.start * 10) / 10, x.side, x.number, x.r.gap, x.r.runReads, x.r.reads.length]) }));
@@ -367,10 +387,10 @@ async function findPlayers(jobs, res, off, onProgress) {
       $('team_left').value = nl; $('team_right').value = nr;
     }
     const [ta, tb] = teams();
-    notes.push(`팀 자동 찾기: 왼쪽 골대 공격 ${ta}(${left.numbers.join('·') || '번호 없음'}), 오른쪽 ${tb}(${right.numbers.join('·') || '번호 없음'})`
+    notes.push(`팀 자동 찾기(공격 방향: ${dirHow}): 왼쪽 골대 공격 ${ta}(${left.numbers.join('·') || '번호 없음'}), 오른쪽 ${tb}(${right.numbers.join('·') || '번호 없음'})`
       + (filled.length < 2 ? ' — 이미 적힌 등번호 명단은 그대로 둠' : ''));
   } else {
-    notes.push(found ? '공격 방향을 셔츠 색으로 가리지 못함(슛이 적거나 섞임)' : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
+    notes.push(found ? `공격 방향을 셔츠 색으로 가리지 못함(슛이 적거나 섞임). 찾은 두 팀 색: ${found.teams.map((t) => colourName(t.lab)).join('·')} — 팀 색을 이 색으로 골라 두면 다음 분석에서 방향을 정함` : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
   }
   // shooters: a number read surely and on the attacking team's list; otherwise (when allowed) the most likely number of that list
   const guessing = $('auto_guess').checked;
@@ -448,6 +468,15 @@ async function runAnalysis() {
     }
     off = settings().cam_offset;
   }
+  // two fixed cameras: shots at a hoop while the players are at the other end are practice (people waiting
+  // to play, warming up): they are left out before the players stage and the record
+  let practiceNote = '';
+  if (two) {
+    const split = Flow.splitPractice([{ shots: res[0].shots, track: res[0].track, offset: 0 }, { shots: res[1].shots, track: res[1].track, offset: off }]);
+    const out = split.flatMap((x, i) => x.practice.map((sh) => sh.start + (i ? off : 0))).sort((x, y) => x - y);
+    split.forEach((x, i) => { res[i].shots = x.game; });
+    if (out.length) practiceNote = ` 경기가 반대쪽 골대에서 진행 중일 때의 슛 ${out.length}개는 빈 골대 연습으로 보고 뺌(${out.slice(0, 8).map((t) => t.toFixed(0)).join('·')}${out.length > 8 ? '…' : ''}초).`;
+  }
   let playersNote = '';
   if (withPlayers) {
     const tp = performance.now();
@@ -489,7 +518,8 @@ async function runAnalysis() {
       : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라에서는 파울을 자동으로 가리지 않음)`;
   const vis = res.map((r, i) => `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`).join(', ');
   status(`분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
-    + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
+    + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${practiceNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
+  S.analysis = { version: APP_VERSION, at: new Date().toISOString(), mode: two ? '카메라 2대' : '카메라 1대', players: withPlayers ? '켜짐' : '꺼짐', status: $('status').textContent };
   if (res.some((r) => r.visibility['없음'] > 0.7)) alert("골대를 거의 찾지 못한 영상이 있습니다. 다른 체육관이나 다른 카메라 위치라면 '새로 만들기'로 체육관 설정을 새로 만들어 주세요.");
   changed();
 }
@@ -848,6 +878,7 @@ function applyWork(s, events) {
   S.vids.A.name = s.video_name || ''; S.vids.B.name = s.video_name_b || '';
   if (!S.vids.A.duration) S.vids.A.duration = s.duration || 0;
   S.ctx = s.flow || null;
+  S.analysis = s.analysis || null;
   S.events = events; S.selId = null;
   for (const e of S.events) if (!e.id) e.id = uid();
   // a record saved before team renames were carried over can hold a third team in its rebounds/turnovers: rebuild them
