@@ -39,7 +39,7 @@ async function run(game, opt = {}) {
   const page = await (await b.newContext({ viewport: { width: 1280, height: 950 }, deviceScaleFactor: 1 })).newPage();
   const log = { game, clips: [clipA, clipB], errors: [], stages: [], players: null };
   page.on('pageerror', (e) => log.errors.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error') log.errors.push(m.text()); if (m.text().startsWith('[players] ')) log.players = JSON.parse(m.text().slice(10)); });
+  page.on('console', (m) => { if (m.type() === 'error') log.errors.push(m.text()); if (m.text().startsWith('[players] ')) log.players = JSON.parse(m.text().slice(10)); if (m.text().startsWith('[practice] ')) log.practice = JSON.parse(m.text().slice(11)); });
   page.on('dialog', (d) => { log.errors.push(`[dialog] ${d.message()}`); d.accept(); });
   try {
     await page.goto(`http://127.0.0.1:${port}/hoopstat/`);

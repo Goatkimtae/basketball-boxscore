@@ -474,6 +474,8 @@ async function runAnalysis() {
   if (two) {
     const split = Flow.splitPractice([{ shots: res[0].shots, track: res[0].track, offset: 0 }, { shots: res[1].shots, track: res[1].track, offset: off }]);
     const out = split.flatMap((x, i) => x.practice.map((sh) => sh.start + (i ? off : 0))).sort((x, y) => x - y);
+    console.info('[practice]', JSON.stringify(split.map((x, i) => ({ cam: i, game: x.game.map((sh) => [Math.round(sh.start), sh.motionRatio]), practice: x.practice.map((sh) => [Math.round(sh.start), sh.motionRatio]),
+      track: { n: res[i].track.length, valid: res[i].track.filter((r) => r[3] >= 0).length, first: res[i].track.slice(0, 3), mid: res[i].track.slice(1000, 1003) } }))));
     split.forEach((x, i) => { res[i].shots = x.game; });
     if (out.length) practiceNote = ` 경기가 반대쪽 골대에서 진행 중일 때의 슛 ${out.length}개는 빈 골대 연습으로 보고 뺌(${out.slice(0, 8).map((t) => t.toFixed(0)).join('·')}${out.length > 8 ? '…' : ''}초).`;
   }

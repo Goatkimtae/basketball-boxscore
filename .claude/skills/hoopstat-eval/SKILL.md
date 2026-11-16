@@ -42,6 +42,6 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - `harness/lib.js`의 `loadCv()`는 전역 `cv`만 세팅(반환값 없음).
 
 ## 2026-11-16 추가 측정
-- 연습 슛 빼기(`Flow.splitPractice`): 시험 경기 엔진 슛 41개 중 1개 뺌(눈으로 확인: 연습), 실제 슛 0개 손실. 사용자 내보내기 72개 중 21개 해당, 6개 눈으로 확인 모두 연습
+- 연습 슛 빼기(`Flow.splitPractice`): 시험 경기 엔진 슛 41개 중 1개 뺌(눈으로 확인: 연습), 실제 슛 0개 손실. 사용자 내보내기 72개 중 20개 해당(0.2초 칸 최댓값, 75% 기준). 앞뒤 프레임이 반복되는 영상(120fps 시간축)에서도 같은 결과, 6개 눈으로 확인 모두 연습
 - 골대 클릭 민감도: `node harness/e2e.js hvn --clips left150,right150 --no-players --rim-offset 0,12` — 바른 클릭 13개, 12px 어긋나면 4~5개
 - 사람 위치: `node research/on-court/scan.js <key> --fps 2` 두 카메라 → `analyse.js --user <내보내기 사건 json>`, `motion-check.js`

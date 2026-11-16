@@ -42,9 +42,10 @@
     FT_STILL: 0.4,      // players stand still before a free throw: motion 3-0.7 s before it, share of median
     MARK_DUR: 0.5,      // fixed cameras: whistle-like sounds this long are listed for the user to judge
     // two fixed cameras: a shot while this camera moves less than PRACTICE x the other one (3 s before to 1 s after)
-    // is someone practising at the empty hoop: the players are at the other end. Checked on one game: practice
-    // 0.00-0.34, game shots 0.63 and up. The other camera must move at least PRACTICE_OTHER (share of its median).
-    PRACTICE: 0.4, PRACTICE_OTHER: 0.45,
+    // is someone practising at the empty hoop: the players are at the other end. Each camera's motion is taken
+    // in 0.2 s slots, as a share of its 75th percentile slot (the median can be 0 when frames repeat). Checked on
+    // one game: practice up to about 0.3, game shots 0.52 and up. The other camera must move at least PRACTICE_OTHER of its scale.
+    PRACTICE: 0.4, PRACTICE_OTHER: 0.2,
   };
   const r1 = (x) => Math.round(x * 10) / 10;
   const isShot = (e) => e.type === '야투' || e.type === '자유투';
@@ -93,14 +94,32 @@
   /** Two fixed cameras [{shots, track, offset}]: each camera's shots split into game shots and practice at the
       empty hoop (much less motion there than at the other end, where the players are). */
   function splitPractice(cams) {
-    const mos = cams.map((c) => motionOf(c.track, c.offset || 0));
+    // motion in 0.2 s slots (the largest value in each: repeated frames, which show no change, cannot pull it
+    // down), as a share of the camera's 75th percentile slot
+    const scaled = (track, shift) => {
+      const slot = new Map();
+      for (const r of track || []) {
+        if (r.length < 4 || r[3] < 0) continue;
+        const k = Math.floor((r[0] + shift) / 0.2);
+        slot.set(k, Math.max(slot.get(k) ?? 0, r[3]));
+      }
+      if (slot.size < 20) return null;
+      const sorted = [...slot.values()].sort((x, y) => x - y), sc = Math.max(1, sorted[Math.floor(sorted.length * 0.75)]);
+      return { mean(t1, t2) {
+        let a = 0, n = 0;
+        for (let k = Math.ceil(t1 / 0.2); k * 0.2 < t2; k++) if (slot.has(k)) { a += slot.get(k); n += 1; }
+        return n >= 3 ? a / n / sc : null;
+      } };
+    };
+    const mos = cams.map((c) => scaled(c.track, c.offset || 0));
     return cams.map((c, i) => {
       const me = mos[i], other = mos[1 - i], game = [], practice = [];
       for (const sh of c.shots || []) {
         const t = sh.start + (c.offset || 0);
         const a = me && me.mean(t - 3, t + 1), b = other && other.mean(t - 3, t + 1);
-        if (a != null && b != null && b >= P.PRACTICE_OTHER && a / b < P.PRACTICE) practice.push({ ...sh, motionRatio: Math.round((a / b) * 100) / 100 });
-        else game.push(sh);
+        const ratio = a != null && b ? Math.round((a / b) * 100) / 100 : null;
+        if (a != null && b != null && b >= P.PRACTICE_OTHER && a / b < P.PRACTICE) practice.push({ ...sh, motionRatio: ratio });
+        else game.push({ ...sh, motionRatio: ratio });
       }
       return { game, practice };
     });

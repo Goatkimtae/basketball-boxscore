@@ -127,8 +127,13 @@ async function analyze(file, templates, post, debug) {
   decoder.configure(config);
   const t0 = performance.now();
 
+  // at most about 30 frames a second, as in the measurements (60/120 fps videos, or repeated frames in a 120 fps
+  // time base, would make every step and the scene motion different, and the analysis 2-4 times slower)
+  let lastT = -Infinity;
   const handle = (f) => {
     const t = f.timestamp / 1e6;
+    if (t - lastT < 1 / 32) { f.close(); done += 1; return; }
+    lastT = t;
     ctx.save();
     if (rot) {
       ctx.translate(W / 2, H / 2);
