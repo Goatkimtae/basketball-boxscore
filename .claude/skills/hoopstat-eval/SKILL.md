@@ -40,3 +40,8 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - 명령 출력을 `| tail`로 받으면 끝날 때까지 아무것도 안 보인다. 긴 작업은 백그라운드로.
 - 엔진 회귀를 4개 동시에 돌리는 동안 다른 무거운 작업을 하면 둘 다 느려진다.
 - `harness/lib.js`의 `loadCv()`는 전역 `cv`만 세팅(반환값 없음).
+
+## 2026-11-16 추가 측정
+- 연습 슛 빼기(`Flow.splitPractice`): 시험 경기 엔진 슛 41개 중 1개 뺌(눈으로 확인: 연습), 실제 슛 0개 손실. 사용자 내보내기 72개 중 21개 해당, 6개 눈으로 확인 모두 연습
+- 골대 클릭 민감도: `node harness/e2e.js hvn --clips left150,right150 --no-players --rim-offset 0,12` — 바른 클릭 13개, 12px 어긋나면 4~5개
+- 사람 위치: `node research/on-court/scan.js <key> --fps 2` 두 카메라 → `analyse.js --user <내보내기 사건 json>`, `motion-check.js`
