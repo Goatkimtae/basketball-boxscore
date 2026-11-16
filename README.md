@@ -13,7 +13,8 @@
 - 자동: 슛 시도와 성공/실패, 리바운드(공격/수비), 턴오버. 휘슬 소리는 검토 목록에 표시됩니다.
 - '빠른 검토'에서 슛 장면을 보며 성공/실패·3점·자유투를 고치고 등번호 버튼을 누르면, 리바운드가 다시 계산되고 팀·선수 박스스코어가 나옵니다.
 - 판정 규칙 테스트: `node --test hoopstat/tests/*.test.js`
-- 등번호 자동 인식 검토 자료(앱에는 넣지 않음): [`research/jersey-numbers/`](research/jersey-numbers/)
+- 등번호·선수 인식 연구 자료: [`research/jersey-numbers/`](research/jersey-numbers/)
+- 개발 하네스(실제 영상으로 앱 코드를 재는 도구): [`harness/`](harness/) — 사용법은 [`.claude/skills/hoopstat-eval/SKILL.md`](.claude/skills/hoopstat-eval/SKILL.md)
 
 ## HoopStat (Windows 앱)
 

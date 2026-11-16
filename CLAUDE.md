@@ -1,0 +1,45 @@
+# HoopStat — 농구 경기 영상으로 기록(박스스코어)을 만드는 웹 앱
+
+## 하네스: HoopStat 개발
+
+**목표:** 휴대폰으로 찍은 농구 경기 영상만으로 팀·선수 기록을 자동으로 만든다(수동 확인 최소화, 비용 없음, 브라우저에서 동작).
+
+**트리거:** HoopStat 기능 추가·정확도 개선·속도·화면·배포 요청은 `hoopstat-orchestrator` 스킬을 사용하라. 측정 명령은 `hoopstat-eval` 스킬. 단순 질문은 직접 답해도 된다.
+
+**역할(에이전트):** `hoopstat-vision`(분석 엔진) · `hoopstat-evaluator`(측정·검수) · `hoopstat-labeler`(정답 라벨) · `hoopstat-app`(앱·문서·배포) — `.claude/agents/`
+
+**자동 점검:** `hoopstat/*.js`를 고치면 훅(`harness/hooks/after-edit.sh`)이 빠른 단위 테스트를 돌리고, 실패하면 바로 알려 준다.
+
+## 구조
+| 경로 | 내용 |
+|---|---|
+| `hoopstat/` | 웹 앱(GitHub Pages: main 브랜치). `engine.js` 골대·공·슛·성공, `players.js` 선수·번호·팀, `worker.js` 영상 해석, `flow.js` 리바운드·턴오버·파울, `stats.js` 박스스코어, `app.js` 화면 |
+| `hoopstat/tests/` | `node --test hoopstat/tests/*.test.js` (CI도 같은 명령) |
+| `harness/` | 실제 영상으로 앱 코드를 돌려 재는 도구(`hoopstat-eval` 스킬 참고). `config.json`은 로컬 경로라 git 제외 |
+| `research/` | 연구 기록(파이썬 가능). 앱에 넣은 방법의 근거와 라벨 데이터(`research/jersey-numbers/data/shots.json`) |
+| `app/` | 예전 Windows 데스크톱 판(파이썬). 사용자는 파이썬 경로를 원하지 않음 — 새 기능은 웹 앱에 |
+| `_workspace/` | 측정 결과·장면 사진(git 제외) |
+
+## 지켜야 할 것
+- 답은 한국어, 쉬운 말. 사실(잰 것)과 추측을 나눈다. 근거 없으면 모른다고 한다.
+- 비용이 드는 방법(유료 API) 쓰지 않는다. 영상은 사용자 PC 밖으로 보내지 않는다.
+- Windows 보안 설정(스마트 앱 컨트롤 등)을 바꾸게 하지 않는다.
+- 공개 저장소: 경기 영상, 공유 링크, 선수 사진을 커밋하지 않는다.
+- 배포: 테스트 → `hoopstat/sw.js` VERSION 올림 → 커밋 → 작업 브랜치 push → `git push origin <branch>:main` → Actions(테스트, Pages) success 확인.
+- 정확도 숫자는 하네스로 잰 것만 문서(`hoopstat/사용법.html`)에 쓴다.
+
+## 알려진 함정
+- OpenCV 탐색(`cap.set`)은 HEVC에서 최대 1초 이르다 → 프레임은 ffmpeg `-ss`(입력 앞).
+- 헤드리스 Chromium은 H.264/HEVC를 못 읽는다 → `harness/make-clips.sh`로 VP9(원본 해상도) 클립.
+- OpenCV.js 객체를 async 함수에서 반환하면 무한 대기(then이 있는 객체) → `harness/lib.js loadCv()`는 전역만 세팅.
+- 프레임 버퍼를 조각마다 이어 붙이면 수십 배 느려진다 → 프레임마다 한 번만 이어 붙임(lib.js `stream`).
+- Quick Share 내려받기는 브라우저 User-Agent가 필요하고, 환경 네트워크 허용 호스트 추가가 필요했다.
+- 슛 이후 골대 근처 밖의 '공' 검출은 주황 신발·옷이 많다 → 리바운드에 그대로 쓰지 말 것.
+
+## 변경 이력
+| 날짜 | 변경 | 사유 |
+|---|---|---|
+| 2026-11-13~14 | 카메라 2대 경기, 빠른 검토, 새 성공 규칙, 큰 파일 스트리밍 | 실제 경기 영상 검토 |
+| 2026-11-15 | 분석 속도 개선(4배), 두 영상 동시 분석 | "분석 시간이 영상 길이만큼" |
+| 2026-11-15 | 선수 단계: 팀 색·명단·공격 방향·슈터 번호 자동(무료, 브라우저) | "수동 확인 없이 자동 기록" |
+| 2026-11-16 | 개발 하네스: CLAUDE.md, 4역할 에이전트, 오케스트레이터·측정 스킬, `harness/` 도구, 편집 후 테스트 훅, 엔진 기준값 | "하네스 엔지니어링으로 효율 높이기" |

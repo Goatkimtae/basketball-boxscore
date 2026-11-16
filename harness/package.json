@@ -1,0 +1,9 @@
+{
+  "name": "hoopstat-harness",
+  "private": true,
+  "description": "Development harness for HoopStat: runs the app's analysis code in Node and in headless Chromium on real game videos and scores it against hand labels.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "onnxruntime-web": "1.17.3"
+  }
+}

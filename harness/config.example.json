@@ -1,0 +1,12 @@
+{
+  "_note": "Copy to harness/config.json (not in git) and put the local paths of the videos. Coordinates are in the app's 768-px-wide picture. 'rim' is where the rim centre is at 'rimTime' seconds (used by the browser test to make the gym profile).",
+  "videos": {
+    "hvn-left":  { "path": "/path/to/game-left-hoop.mp4", "camera": "L", "side": "왼쪽", "template": "harness/templates/hvn-left.json",  "rim": [67, 151], "rimTime": 10, "shotLabels": "hoopstat/tests/data/hvn-left-labels.json" },
+    "hvn-right": { "path": "/path/to/game-right-hoop.mp4", "camera": "R", "side": "오른쪽", "template": "harness/templates/hvn-right.json", "rim": [623, 169], "rimTime": 12, "shotLabels": "hoopstat/tests/data/hvn-right-labels.json" },
+    "band-sample": { "path": "/path/to/band_video_sample.mp4", "template": "harness/templates/band.json" },
+    "band-foul":   { "path": "/path/to/foul-video-1.mp4", "template": "harness/templates/band.json", "shotLabels": "hoopstat/tests/data/foul-video-1-labels.json" }
+  },
+  "games": {
+    "hvn": { "left": "hvn-left", "right": "hvn-right", "offset": 1.12, "clips": { "left": "/path/to/Lfull.mp4", "right": "/path/to/Rfull.mp4" } }
+  }
+}

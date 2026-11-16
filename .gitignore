@@ -6,3 +6,8 @@ dist/
 .pytest_cache/
 *.mp4
 *.mov
+
+# harness: local paths and run outputs
+harness/node_modules/
+harness/config.json
+_workspace/

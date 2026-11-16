@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/harness/hooks/after-edit.sh\"",
+            "timeout": 60,
+            "statusMessage": "HoopStat 단위 테스트"
+          }
+        ]
+      }
+    ]
+  }
+}
