@@ -52,6 +52,7 @@ function settings() {
   return s;
 }
 function teams() { const s = settings(); return [s.team_left || '팀 A', s.team_right || '팀 B']; }
+let knownTeams = null;
 const flowCtx = () => S.ctx || { mode: twoCam() ? 'two' : 'pan', segs: [] };
 
 function save() {
@@ -506,6 +507,7 @@ $('cancelBtn').addEventListener('click', () => { stopWorkers(); finish(); status
 function cell(text, cls) { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text ?? ''; return td; }
 const selIndex = () => S.events.findIndex((e) => e.id === S.selId);
 function render() {
+  knownTeams = teams();          // names set by the app (loading, team finding) are what the records use
   S.events.sort((a, b) => a.time - b.time);
   const tb = $('eventTable').tBodies[0];
   tb.replaceChildren(...S.events.map((e) => {
@@ -848,9 +850,39 @@ function applyWork(s, events) {
   S.ctx = s.flow || null;
   S.events = events; S.selId = null;
   for (const e of S.events) if (!e.id) e.id = uid();
+  // a record saved before team renames were carried over can hold a third team in its rebounds/turnovers: rebuild them
+  const names = teams();
+  if (S.events.some((e) => e.derived && e.team && !names.includes(e.team))) S.events = Flow.derive(S.events, settings(), flowCtx());
+  for (const e of S.events) if (!e.id) e.id = uid();
   render(); save();
 }
-for (const id of SETTING_IDS) $(id).addEventListener('change', () => { if (id === 'cam_mode') applyMode(); render(); save(); });
+// Team names as the records know them (kept by render): a name changed after the analysis is changed in the
+// records too (otherwise the rebuilt rebounds and turnovers go to a third team with the new name).
+function renameTeams() {
+  const now = teams(), map = new Map();
+  if (!knownTeams) { knownTeams = now; return false; }
+  knownTeams.forEach((old, i) => { if (old && now[i] && old !== now[i] && knownTeams[1 - i] !== old) map.set(old, now[i]); });
+  knownTeams = now;
+  if (!map.size) return false;
+  for (const e of S.events) {
+    if (map.has(e.team)) e.team = map.get(e.team);
+    if (e.reb) e.reb = Object.fromEntries(Object.entries(e.reb).map(([k, v]) => [map.get(k) || k, v]));
+  }
+  return true;
+}
+for (const id of SETTING_IDS) {
+  $(id).addEventListener('change', () => {
+    if (id === 'cam_mode') applyMode();
+    if (id === 'team_left' || id === 'team_right') { if (renameTeams()) { changed(); return; } }
+    if (id === 'switch_time') {
+      // the teams of the automatic shots follow the new switch time (each shot knows its hoop)
+      const s = settings();
+      for (const e of S.events) if (e.side && e.source === '자동' && (e.type === '야투' || e.type === '자유투')) e.team = Stats.teamFor(e.side, e.time, s);
+      changed(); return;
+    }
+    render(); save();
+  });
+}
 $('profileSel').addEventListener('change', save);
 
 /* ------------------------------------------------------------------ install (PWA) */
