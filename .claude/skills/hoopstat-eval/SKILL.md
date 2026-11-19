@@ -71,3 +71,4 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - 팀 A/B·두 쿼터·행 바꾸기: `node harness/e2e.js hvn --clips left150,right150 --quarters --swap`
 - 대체 추정 측정: `node research/direction/fallback.js`(가장 자주 읽힌 번호: 슈터 5/20, 리바운더 2/9)
 - 다른 체육관 팀 색: `node harness/players-run.js band-foul --no-shots` 후 findTeams — 어두운 남색·흰색(눈으로 본 것과 같음), 빨간 옷은 따로
+- 앱 전체 v14(브라우저, 8분 경기, 11분 3초): 슛·성공·자유투·파울·리바운드·턴오버 v13과 같음(야투 34·성공 7·자유투 3·파울 3), 라벨 슈터 맞음 13·틀림 5(v13과 같음), 가장 자주 읽힌 번호 대체를 뺀 만큼 번호 없는 슛 9개, 열린 항목 결과 미확인 37·번호 추정 50·번호 없음 9·휘슬 미판정 20(v13은 0으로 보였음), 방향 슈터 12표+수비 56표, 엔진 회귀 4개 PASS(+ both-sim 기준값 42)
