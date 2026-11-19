@@ -156,3 +156,29 @@ test('whistle rows get a guessed team: the defending team of a shot right before
   const again = Flow.derive(out, s, { mode: 'two', segs: [] });
   assert.strictEqual((again.find((e) => (e.note || '').startsWith('w1')).note.match(/팀 추정/g) || []).length, 1);
 });
+
+test('two fixed cameras: a whistle after which both cameras go quiet is a foul with a number; one after which play goes on is closed', () => {
+  // play at the left end: left camera busy; quiet after 30 s for 15 s (a stoppage), busy again from 45 s
+  const tr = (busy) => Array.from({ length: 1200 }, (_, i) => { const t = i / 10; return [t, 1, 0, busy(t) ? 40 : 1]; });
+  const left = tr((t) => t < 30.5 || t > 45), right = tr(() => false);
+  const sh = { ...shot(28.5, '왼쪽'), def: { team: '남색', number: '44', guess: false } };
+  const result = { shots: [sh], cams: [{ id: 'A', side: '왼쪽', track: left, offset: 0 }, { id: 'B', side: '오른쪽', track: right, offset: 0 }],
+    whistles: [{ t: 30, dur: 1.2, f: 3300 }, { t: 70, dur: 1.0, f: 3300 }], mostSeen: { 빨강: '9', 남색: '28' } };
+  const { events } = Flow.infer(result, S);
+  const fouls = events.filter((e) => e.type === '파울'), wh = events.filter((e) => e.type === '휘슬');
+  assert.strictEqual(fouls.length, 1);
+  assert.strictEqual(fouls[0].team, '남색');            // right after 빨강's missed shot: the defence
+  assert.strictEqual(fouls[0].player, '44');            // the shooter's nearest opponent
+  assert.strictEqual(wh.length, 1); assert.ok(wh[0].checked);   // 70 s: play went on -> closed automatically
+});
+
+test('a turnover gets the number of the rebounder who started that possession, else the team\'s most often seen number', () => {
+  const ev = [
+    { time: 10, end: 11, team: '빨강', side: '왼쪽', type: '야투', detail: '2점', result: '실패', source: '자동' },
+    { time: 11.3, team: '남색', type: '리바운드', detail: '수비', source: '수동', player: '28' },
+    { time: 30, end: 31, team: '빨강', side: '왼쪽', type: '야투', detail: '2점', result: '실패', source: '자동' },   // 남색 never shot: turnover
+  ];
+  const out = Flow.derive(ev, S, { mode: 'two', segs: [], mostSeen: { 빨강: '9', 남색: '44' } });
+  const to = out.find((e) => e.type === '턴오버');
+  assert.ok(to); assert.strictEqual(to.team, '남색'); assert.strictEqual(to.player, '28'); assert.ok(to.playerGuess);
+});

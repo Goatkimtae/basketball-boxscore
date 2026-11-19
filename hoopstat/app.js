@@ -402,11 +402,21 @@ async function findPlayers(jobs, res, off, onProgress) {
   // shooters: a number read surely and on the attacking team's list; otherwise (when allowed) the most likely number of that list
   const guessing = $('auto_guess').checked;
   const prof = Players.lookProfiles(out.flatMap((r) => r.people), [...rosterList(teams()[0]), ...rosterList(teams()[1])]);
+  // the fallback guess for somebody nobody could see: the team's most often seen number
+  const mostSeen = (list) => [...list].sort((a, b) => ((prof[b] && prof[b].seen) || 0) - ((prof[a] && prof[a].seen) || 0))[0] || null;
+  S.mostSeen = guessing ? Object.fromEntries(teams().map((t) => [t, mostSeen(rosterList(t))]).filter(([, n]) => n)) : null;
+  const guessIn = (look, reads, list) => (guessing ? (Players.guessNumber(look, reads, list, prof) || (mostSeen(list) ? { number: mostSeen(list) } : null)) : null);
   let auto = 0, guessed = 0;
   for (const x of shotList) {
     const team = Stats.teamFor(x.side, x.t, settings()), list = rosterList(team);
+    // the shooter's nearest opponent: who fouled, if this shot was fouled (used when a whistle follows)
+    const opp = teams().find((t) => t !== team), olist = rosterList(opp), d = x.r.def;
+    if (d) {
+      if (d.number && olist.includes(d.number)) x.sh.def = { team: opp, number: d.number, guess: false };
+      else { const g = guessIn(d.look, d.reads, olist); if (g) x.sh.def = { team: opp, number: g.number, guess: true }; }
+    }
     if (x.number && list.includes(x.number)) { Object.assign(x.sh, { player: x.number, playerAuto: true, playerGuess: false }); auto++; continue; }
-    const g = guessing ? Players.guessNumber(x.r.look, x.r.reads, list, prof) : null;
+    const g = guessIn(x.r.look, x.r.reads, list);
     if (g) { Object.assign(x.sh, { player: g.number, playerAuto: true, playerGuess: true }); guessed++; }
   }
   // rebounders, for each team (play flow decides which team got the ball): the shooter of a put-back within 3 s,
@@ -420,7 +430,7 @@ async function findPlayers(jobs, res, off, onProgress) {
       const list = rosterList(team);
       if (next && next.sh.player && Stats.teamFor(next.side, next.t, settings()) === team) { reb[team] = { number: next.sh.player, guess: !!next.sh.playerGuess, how: '연속 슛' }; continue; }
       if (x.reb && x.reb.number && list.includes(x.reb.number)) { reb[team] = { number: x.reb.number, guess: false, how: '번호 읽음' }; continue; }
-      const g = guessing && x.reb ? Players.guessNumber(x.reb.look, x.reb.reads, list, prof) : null;
+      const g = guessIn(x.reb ? x.reb.look : null, x.reb ? x.reb.reads : [], list);
       if (g) reb[team] = { number: g.number, guess: true, how: '추정' };
     }
     if (Object.keys(reb).length) { x.sh.reb = reb; rebs++; }
@@ -441,6 +451,7 @@ async function runAnalysis() {
     ? [{ cam: 'A', name: '왼쪽 골대 영상', file: S.vids.A.file, tpl: { 왼쪽: tpl['왼쪽'] } }, { cam: 'B', name: '오른쪽 골대 영상', file: S.vids.B.file, tpl: { 오른쪽: tpl['오른쪽'] } }]
     : [{ cam: 'A', name: '', file: S.vids.A.file, tpl }];
   const withPlayers = $('auto_players').checked;
+  S.mostSeen = null;
   $('runBtn').disabled = true; $('cancelBtn').disabled = false; $('bar').value = 0;
   status('분석 준비 중… (처음에는 분석 도구를 내려받느라 조금 걸립니다)');
   const t0 = performance.now(), prog = jobs.map(() => ({ frac: 0, eta: null, label: '영상 읽는 중' }));
@@ -516,6 +527,7 @@ async function runAnalysis() {
   } else {
     result = res[0];
   }
+  if (withPlayers && S.mostSeen) result.mostSeen = S.mostSeen;
   const s2 = settings();
   const out = Flow.infer(result, s2);
   S.ctx = out.ctx;
@@ -531,6 +543,10 @@ async function runAnalysis() {
   S.analysis = { version: APP_VERSION, at: new Date().toISOString(), mode: two ? '카메라 2대' : '카메라 1대', players: withPlayers ? '켜짐' : '꺼짐', status: $('status').textContent };
   if (res.some((r) => r.visibility['없음'] > 0.7)) alert("골대를 거의 찾지 못한 영상이 있습니다. 다른 체육관이나 다른 카메라 위치라면 '새로 만들기'로 체육관 설정을 새로 만들어 주세요.");
   changed();
+  // with everything filled in automatically nothing may be left to check
+  const left = S.events.filter(needsReview).length;
+  status($('status').textContent.replace("다음은 '빠른 검토'.", left ? `확인이 필요한 기록 ${left}개('빠른 검토'). 번호의 '(추정)'은 가장 가능성 높은 선수.` : "모든 기록에 팀·번호·판정이 자동으로 들어감(번호의 '(추정)'은 가장 가능성 높은 선수). 검토 없이 박스스코어를 쓸 수 있음."));
+  S.analysis.status = $('status').textContent; save();
 }
 $('runBtn').addEventListener('click', runAnalysis);
 $('auto_players').checked = lsGet('hoopstat.autoPlayers', true) !== false;
@@ -694,7 +710,7 @@ $('delBtn').addEventListener('click', () => {
 const NO_PLAYER = new Set(['휘슬']);
 const isShot = (e) => e.type === '야투' || e.type === '자유투';
 /** still to do in the quick review: an automatic shot nobody confirmed (unless its shooter's number was read automatically), or a record without a jersey number */
-const needsReview = (e) => e.type === '휘슬' || (e.team && !NO_PLAYER.has(e.type) && ((isShot(e) && e.source === '자동' && !e.checked && !e.playerAuto) || !(e.player || '').trim()));
+const needsReview = (e) => (e.type === '휘슬' && !e.checked) || (e.team && !NO_PLAYER.has(e.type) && ((isShot(e) && e.source === '자동' && !e.checked && !e.playerAuto) || !(e.player || '').trim()));
 function rosterOf(team) {
   const s = settings(), [a, b] = teams();
   const raw = team === a ? s.roster_left : team === b ? s.roster_right : '';

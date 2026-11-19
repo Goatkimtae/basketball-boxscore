@@ -46,6 +46,9 @@
     // in 0.2 s slots, as a share of its 75th percentile slot (the median can be 0 when frames repeat). Checked on
     // one game: practice up to about 0.3, game shots 0.52 and up. The other camera must move at least PRACTICE_OTHER of its scale.
     PRACTICE: 0.4, PRACTICE_OTHER: 0.2,
+    // two fixed cameras: a whistle stopped play (stoppedTwo): both cameras' motion 1-5 s and 1-12 s after it, as a
+    // share of the 4 s before, and the least motion before (play was on)
+    STOP2_5: 0.6, STOP2_12: 0.8, STOP2_MIN: 0.8,
   };
   const r1 = (x) => Math.round(x * 10) / 10;
   const isShot = (e) => e.type === '야투' || e.type === '자유투';
@@ -93,25 +96,34 @@
 
   /** Two fixed cameras [{shots, track, offset}]: each camera's shots split into game shots and practice at the
       empty hoop (much less motion there than at the other end, where the players are). */
+  /** motion in 0.2 s slots (the largest value in each: repeated frames, which show no change, cannot pull it
+      down), as a share of the camera's 75th percentile slot; shift moves the track onto the game clock */
+  function slotMotion(track, shift = 0) {
+    const slot = new Map();
+    for (const r of track || []) {
+      if (r.length < 4 || r[3] < 0) continue;
+      const k = Math.floor((r[0] + shift) / 0.2);
+      slot.set(k, Math.max(slot.get(k) ?? 0, r[3]));
+    }
+    if (slot.size < 20) return null;
+    const sorted = [...slot.values()].sort((x, y) => x - y), sc = Math.max(1, sorted[Math.floor(sorted.length * 0.75)]);
+    return { mean(t1, t2) {
+      let a = 0, n = 0;
+      for (let k = Math.ceil(t1 / 0.2); k * 0.2 < t2; k++) if (slot.has(k)) { a += slot.get(k); n += 1; }
+      return n >= 3 ? a / n / sc : null;
+    } };
+  }
+  /** Two fixed cameras: did play stop after this whistle? Both cameras' motion together (players crossing from one
+      half to the other keep moving in the sum): after (1-5 s and 1-12 s) much less than before (4 s), and play was
+      on before. See research/whistles/ for the labels these limits were set on. */
+  function stoppedTwo(slots, w) {
+    const sum = (t1, t2) => { let a = 0, n = 0; for (const m of slots) { const v = m && m.mean(t1, t2); if (v != null) { a += v; n++; } } return n ? a : null; };
+    const before = sum(w.t - 4, w.t), a5 = sum(w.t + 1, w.t + 5), a12 = sum(w.t + 1, w.t + 12);
+    if (before == null || a5 == null || a12 == null || before < P.STOP2_MIN) return false;
+    return a5 / before < P.STOP2_5 && a12 / before < P.STOP2_12;
+  }
   function splitPractice(cams) {
-    // motion in 0.2 s slots (the largest value in each: repeated frames, which show no change, cannot pull it
-    // down), as a share of the camera's 75th percentile slot
-    const scaled = (track, shift) => {
-      const slot = new Map();
-      for (const r of track || []) {
-        if (r.length < 4 || r[3] < 0) continue;
-        const k = Math.floor((r[0] + shift) / 0.2);
-        slot.set(k, Math.max(slot.get(k) ?? 0, r[3]));
-      }
-      if (slot.size < 20) return null;
-      const sorted = [...slot.values()].sort((x, y) => x - y), sc = Math.max(1, sorted[Math.floor(sorted.length * 0.75)]);
-      return { mean(t1, t2) {
-        let a = 0, n = 0;
-        for (let k = Math.ceil(t1 / 0.2); k * 0.2 < t2; k++) if (slot.has(k)) { a += slot.get(k); n += 1; }
-        return n >= 3 ? a / n / sc : null;
-      } };
-    };
-    const mos = cams.map((c) => scaled(c.track, c.offset || 0));
+    const mos = cams.map((c) => slotMotion(c.track, c.offset || 0));
     return cams.map((c, i) => {
       const me = mos[i], other = mos[1 - i], game = [], practice = [];
       for (const sh of c.shots || []) {
@@ -159,8 +171,10 @@
     const out = [], timeline = [];
     const add = (o) => out.push({ player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', derived: true, ...o, time: r1(o.time) });
     const endOf = (e) => (e.end != null && e.end >= e.time && e.end <= e.time + 6 ? e.end : e.time + 1);
-    let poss = null, since = null;
-    const have = (team, t) => { poss = team; since = t; timeline.push([t, team]); };
+    let poss = null, since = null, by = null;
+    // by: the record that gave the team the ball (a rebound: its player probably brought the ball up)
+    const have = (team, t, from = null) => { poss = team; since = t; by = from; timeline.push([t, team]); };
+    const mostSeen = (ctx && ctx.mostSeen) || {};
 
     function turnover(team, e) {
       let t;
@@ -173,7 +187,9 @@
         t = Math.max(since + 1, e.time - 5);
       }
       t = Math.max(Math.min(t, e.time - 1), since);
-      add({ time: t, team, type: '턴오버', side: sideOf(team, t),
+      // who lost it: not seen; the rebounder who started this possession, else the team's most often seen number
+      const who = by && by.team === team && (by.player || '').trim() ? by.player : mostSeen[team] || '';
+      add({ time: t, team, type: '턴오버', side: sideOf(team, t), ...(who ? { player: who, playerAuto: true, playerGuess: true } : {}),
         note: `${since.toFixed(1)}초에 공을 가졌는데 다음 슛(${Number(e.time).toFixed(1)}초)은 상대 팀 → 슛 없이 공을 잃음(턴오버). 시각은 추정.`
           + (mode === 'two' ? ' 앱이 이 팀의 슛을 놓쳤을 수도 있으니 장면 보기로 확인.' : ' 스틸이었는지는 장면 보기로 확인.') });
     }
@@ -223,9 +239,9 @@
         if (base.some((f) => f.type === '리바운드' && f.time >= e.time - 0.2 && f.time < tNext && f !== e)) continue;
         const reb = withPlayer(e, rebound(e, T, next));
         add(reb);
-        have(reb.team, reb.time);
+        have(reb.team, reb.time, reb);
       } else if (e.type === '파울' || e.type === '턴오버') have(other(T), e.time);
-      else if (e.type === '리바운드' || e.type === '스틸') have(T, e.time);
+      else if (e.type === '리바운드' || e.type === '스틸') have(T, e.time, e);
     }
     return { derived: out, timeline };
   }
@@ -241,7 +257,7 @@
     const shots = base.filter((e) => e.type === '야투' && teams.includes(e.team));
     const possAt = (t) => { let p = null; for (const [tt, team] of timeline) if (tt <= t) p = team; return p; };
     for (const w of base) {
-      if (w.type !== '휘슬' || w.source !== '자동' || (w.team && !w.teamGuess)) continue;
+      if (w.type !== '휘슬' || w.source !== '자동' || w.checked || (w.team && !w.teamGuess)) continue;
       if (w.noteBase == null) w.noteBase = w.note || '';
       const sh = shots.filter((e) => e.time >= w.time - P.FOUL_BEFORE && e.time <= w.time + P.FOUL_AFTER).pop();
       let team = '', why = '';
@@ -283,14 +299,18 @@
     const segs = two ? [] : segments(cams[0].track);
     const seen = ['왼쪽', '오른쪽'].filter((sd) => timeOn(segs, sd, -Infinity, Infinity) >= P.FLIP_MIN);
     const mode = two ? 'two' : seen.length === 1 ? 'one' : 'pan';
-    const ctx = { mode, segs: segs.map((g) => ({ side: g.side, start: r1(g.start), end: r1(g.end) })) };
+    const ctx = { mode, segs: segs.map((g) => ({ side: g.side, start: r1(g.start), end: r1(g.end) })), ...(result.mostSeen ? { mostSeen: result.mostSeen } : {}) };
     const mos = cams.map((c) => ({ side: c.side, mo: motionOf(c.track, c.offset || 0) })).filter((x) => x.mo);
     const moFor = (side) => (two ? (mos.find((x) => x.side === side) || {}).mo || null : mos.length ? mos[0].mo : null);
 
     const all = [...(result.shots || [])].sort((a, b) => a.start - b.start);
     const { kept, dropped } = mode === 'pan' ? dropConflicts(all, segs) : { kept: all, dropped: [] };
     const whistles = [...(result.whistles || [])].sort((a, b) => a.t - b.t);
-    const fouls = mode === 'pan' ? whistles.filter((w) => stopped(mos.map((x) => x.mo), w)) : [];
+    const slots = two ? cams.map((c) => slotMotion(c.track, c.offset || 0)) : [];
+    const fouls = mode === 'pan' ? whistles.filter((w) => stopped(mos.map((x) => x.mo), w))
+      : two ? whistles.filter((w) => w.dur >= P.MARK_DUR && stoppedTwo(slots, w)) : [];
+    // the most often seen number of each team (players stage): the fallback guess for a player nobody could see
+    const fallback = (team) => (result.mostSeen && result.mostSeen[team]) || '';
 
     // shooting fouls: a foul, then the first shot at the same hoop within 40 s, taken while players stand still
     const used = new Set(), trips = [];
@@ -312,7 +332,13 @@
     const ev = [];
     const add = (o) => { const e = { player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', ...o, time: r1(o.time) }; ev.push(e); return e; };
     // the shooter's number when the players stage read it (see players.js)
-    const shooter = (sh) => ({ ...(sh.player ? { player: sh.player, playerAuto: !!sh.playerAuto, playerGuess: !!sh.playerGuess } : {}), ...(sh.reb ? { reb: sh.reb } : {}) });
+    const shooter = (sh) => ({ ...(sh.player ? { player: sh.player, playerAuto: !!sh.playerAuto, playerGuess: !!sh.playerGuess } : {}), ...(sh.reb ? { reb: sh.reb } : {}), ...(sh.def ? { def: sh.def } : {}) });
+    // who fouled: the shooter's nearest opponent (read or guessed by the players stage), else the fouling team's fallback
+    const fouler = (team, sh) => {
+      if (sh && sh.def && sh.def.team === team && sh.def.number) return { player: sh.def.number, playerAuto: true, playerGuess: !!sh.def.guess };
+      const f = fallback(team);
+      return f ? { player: f, playerAuto: true, playerGuess: true } : {};
+    };
     const whistleText = (w) => `${w.t.toFixed(1)}초 휘슬(${w.dur.toFixed(1)}초간) 뒤 선수들이 멈춤`;
     const fgEvent = (sh, extra = '') => add({
       time: sh.start, end: r1(sh.end), team: teamOf(sh.side, sh.start), type: '야투', detail: '2점', result: sh.made ? '성공' : '실패',
@@ -324,7 +350,7 @@
     for (const { w, fg, ft, still } of trips) {
       const team = teamOf(ft.side, ft.start), andOne = !!(fg && fg.made);
       if (andOne) fgEvent(fg, '. 슛 직후 휘슬 → 앤드원');
-      add({ time: w.t, team: other(team), type: '파울', detail: '슈팅파울', side: ft.side, cam: ft.cam,
+      add({ time: w.t, team: other(team), type: '파울', detail: '슈팅파울', side: ft.side, cam: ft.cam, ...fouler(other(team), fg),
         note: `${whistleText(w)}, ${ft.start.toFixed(1)}초에 같은 골대에서 선수들이 선 채로 슛 1개 → 슈팅 파울과 자유투로 판단.`
           + (fg ? (andOne ? ' 슛이 들어가 앤드원.' : ` ${fg.start.toFixed(1)}초의 실패한 슛은 야투 시도로 세지 않음(FIBA).`) : '') });
       const detail = andOne ? '앤드원' : '2점슛 파울';
@@ -342,13 +368,13 @@
       if (tripOf.has(w)) continue;
       const onShot = fgs.find((e) => e.result !== '성공' && w.t >= e.end - 0.5 && w.t <= e.end + P.ON_SHOT);
       if (onShot) {
-        add({ time: w.t, team: other(onShot.team), type: '파울', detail: '개인파울', side: onShot.side, cam: onShot.cam,
+        add({ time: w.t, team: other(onShot.team), type: '파울', detail: '개인파울', side: onShot.side, cam: onShot.cam, ...fouler(other(onShot.team), onShot),
           note: `${whistleText(w)} → 파울로 판단. ${Number(onShot.time).toFixed(1)}초 슛 직후라 수비 팀(${other(onShot.team)}) 파울로 봄. 리바운드 없이 ${onShot.team} 공격 계속. 공격자 파울이나 바이얼레이션이었으면 '수정'에서 바꾸세요.` });
         continue;
       }
       const p = possAt(w.t);
       if (p) {
-        add({ time: w.t, team: other(p), type: '파울', detail: '개인파울',
+        add({ time: w.t, team: other(p), type: '파울', detail: '개인파울', ...fouler(other(p), null),
           note: `${whistleText(w)} → 파울로 판단. 그때 공을 가진 ${p}의 상대 팀 파울로 봄. 공격자 파울이나 바이얼레이션이었으면 '수정'에서 바꾸세요.` });
       } else {
         add({ time: w.t, team: '', type: '휘슬', note: `${whistleText(w)}. 어느 팀 파울인지 정하지 못함. 장면을 보고 '수정'에서 파울로 바꾸세요.` });
@@ -357,9 +383,15 @@
 
     if (mode !== 'pan') {
       for (const w of whistles) {
-        if (w.dur < P.MARK_DUR) continue;
-        add({ time: w.t, team: '', type: '휘슬',
-          note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz). 고정 카메라 영상에서는 파울인지 자동으로 가리지 못합니다. 빠른 검토에서 파울이면 팀을 고르고, 아니면 지우세요.` });
+        if (w.dur < P.MARK_DUR || fouls.includes(w)) continue;
+        if (two) {
+          // judged automatically: play did not stop, so not a foul (kept closed for the record, not counted, not reviewed)
+          add({ time: w.t, team: '', type: '휘슬', checked: true, confidence: '자동',
+            note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz) 뒤 경기가 멈추지 않아 파울이 아닌 것으로 판단(자동). 파울이었으면 '수정'에서 바꾸세요.` });
+        } else {
+          add({ time: w.t, team: '', type: '휘슬',
+            note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz). 이 카메라 영상에서는 파울인지 자동으로 가리지 못합니다. 빠른 검토에서 파울이면 팀을 고르고, 아니면 지우세요.` });
+        }
       }
     }
 
@@ -373,7 +405,7 @@
     };
   }
 
-  const Flow = { P, segments, timeOn, motionOf, splitPractice, stopped, dropConflicts, possession, guessWhistles, derive, infer };
+  const Flow = { P, segments, timeOn, motionOf, slotMotion, stoppedTwo, splitPractice, stopped, dropConflicts, possession, guessWhistles, derive, infer };
   if (typeof window !== 'undefined') window.Flow = Flow;
   if (typeof module !== 'undefined') module.exports = Flow;
 })(typeof window !== 'undefined' ? window : globalThis);

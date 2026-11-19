@@ -419,6 +419,8 @@ function decideNumber(reads, tGather) {
 
 /** One shot: frames arrive in time order; people near the ball are followed; at the end the shooter is chosen
     and the numbers on that person are read. shot: {id, t, x, y, rimW, ball: [[t, x, y]]} in PROC_W coordinates. */
+// the defender of a shot: within 1.5 shooter heights of the shooter at the gather; numbers read 1 s around it
+const DEF = { NEAR: 1.5, READ_FRAMES: 10 };
 class ShotWindow {
   constructor(shot, W, H, procW) {
     this.shot = shot; this.W = W; this.H = H; this.sc = W / procW; this.kind = 'shot';
@@ -472,32 +474,68 @@ class ShotWindow {
     return shooter;
   }
 
-  /** -> {id, kind, number, gap, reads, lab, look}: the picked person's number (read near time shot.t) and look */
+  /** numbers read on one followed person, on every second of the given frames: [[t, text, conf]] */
+  async readTrack(track, frames, reader) {
+    const reads = [];
+    for (let i = 0; i < frames.length; i += 2) {
+      const img = this.crops.get(`${track.id}:${frames[i]}`);
+      if (!img) continue;
+      const big = new cv.Mat(), k = PL.OCR_H / img.rows;
+      cv.resize(img, big, new cv.Size(0, 0), k, k, cv.INTER_CUBIC);
+      const found = await reader.read(big);
+      big.delete();
+      for (const x of found) {
+        if (/^\d{1,2}$/.test(x.text) && x.conf >= PL.READ_CONF && x.cx >= 0.15 && x.cx <= 0.85) {
+          reads.push([Math.round((this.t0 + frames[i] / PL.FPS) * 100) / 100, x.text, Math.round(x.conf * 1000) / 1000]);
+        }
+      }
+    }
+    return reads;
+  }
+
+  /** the nearest person in other colours than the shooter at the gather (the defender: who fouled, if the shot was fouled) */
+  defender(all, shooter, ck) {
+    const sb = shooter.boxes.get(ck), slab = shooter.cols.get(ck) || shooter.col;
+    if (!sb || !slab) return null;
+    const scx = (sb[0] + sb[2]) / 2, scy = (sb[1] + sb[3]) / 2, sh = sb[3] - sb[1];
+    let best = null, bd = Infinity;
+    for (const t of all) {
+      if (t === shooter) continue;
+      let fk = null;
+      for (const k of t.boxes.keys()) if (Math.abs(k - ck) <= 3 && (fk == null || Math.abs(k - ck) < Math.abs(fk - ck))) fk = k;
+      if (fk == null) continue;
+      const lab = t.cols.get(fk) || t.col;
+      if (!lab || Math.hypot(lab[0] - slab[0], lab[1] - slab[1], lab[2] - slab[2]) <= PL.COLOUR_GATE) continue;   // a team-mate
+      const b = t.boxes.get(fk), d = Math.hypot((b[0] + b[2]) / 2 - scx, (b[1] + b[3]) / 2 - scy) / sh;
+      if (d < bd && d <= DEF.NEAR) { bd = d; best = { t, fk, d }; }
+    }
+    return best;
+  }
+
+  /** -> {id, kind, number, gap, reads, lab, look, def}: the picked person's number (read near time shot.t) and look;
+      def: the same for the nearest opponent at the gather ({number, reads, look, lab, dist}) or null */
   async finish(reader) {
     const s = this.shot, all = this.tracker.all(), gf = Math.round((s.t - this.t0) * PL.FPS);
     const shooter = this.pick(all);
-    const out = { id: s.id, kind: this.kind, number: null, gap: null, reads: [], lab: null, look: null };
+    const out = { id: s.id, kind: this.kind, number: null, gap: null, reads: [], lab: null, look: null, def: null };
     if (shooter) {
       const ks = [...shooter.boxes.keys()].sort((a, b) => a - b);
       let ck = ks[0];
       for (const k of ks) if (Math.abs(k - gf) < Math.abs(ck - gf)) ck = k;
       out.lab = shooter.cols.get(ck) || shooter.col;
       out.look = medianLook(ks.map((k) => this.looks.get(`${shooter.id}:${k}`)));
-      for (let i = 0; i < ks.length; i += 2) {             // every second frame of the shooter
-        const img = this.crops.get(`${shooter.id}:${ks[i]}`);
-        if (!img) continue;
-        const big = new cv.Mat(), k = PL.OCR_H / img.rows;
-        cv.resize(img, big, new cv.Size(0, 0), k, k, cv.INTER_CUBIC);
-        const found = await reader.read(big);
-        big.delete();
-        for (const x of found) {
-          if (/^\d{1,2}$/.test(x.text) && x.conf >= PL.READ_CONF && x.cx >= 0.15 && x.cx <= 0.85) {
-            out.reads.push([Math.round((this.t0 + ks[i] / PL.FPS) * 100) / 100, x.text, Math.round(x.conf * 1000) / 1000]);
-          }
-        }
-      }
+      out.reads = await this.readTrack(shooter, ks, reader);           // every second frame of the shooter
       const d = decideNumber(out.reads, s.t);
       if (d) { out.number = d.number; out.gap = d.gap; out.runReads = d.reads; }
+      if (this.kind === 'shot') {
+        const df = this.defender(all, shooter, ck);
+        if (df) {
+          const near = [...df.t.boxes.keys()].sort((a, b) => a - b).filter((k) => Math.abs(k - df.fk) <= DEF.READ_FRAMES);
+          const reads = await this.readTrack(df.t, near, reader), dd = decideNumber(reads, s.t);
+          out.def = { number: dd ? dd.number : null, reads, look: medianLook(near.map((k) => this.looks.get(`${df.t.id}:${k}`))),
+            lab: df.t.cols.get(df.fk) || df.t.col, dist: Math.round(df.d * 100) / 100 };
+        }
+      }
     }
     this.close();
     return out;
@@ -662,7 +700,7 @@ function guessNumber(look, reads, roster, prof) {
   return { number: roster[i], p: Math.round((e[i] / z) * 100) / 100 };
 }
 
-if (typeof module !== 'undefined') module.exports = { PL, TEAM, GUESS, REB, ReboundWindow, lookOf, medianLook, lookProfiles, guessNumber, iou, hungarian, torsoRect, shirtOf, bhattacharyya, PersonDetector, Tracker, NumberReader, decideNumber, ShotWindow, peopleIn, kmeans, labToHex, findTeams, attackDirection };
+if (typeof module !== 'undefined') module.exports = { PL, TEAM, GUESS, REB, DEF, ReboundWindow, lookOf, medianLook, lookProfiles, guessNumber, iou, hungarian, torsoRect, shirtOf, bhattacharyya, PersonDetector, Tracker, NumberReader, decideNumber, ShotWindow, peopleIn, kmeans, labToHex, findTeams, attackDirection };
 if (typeof self !== 'undefined' && typeof importScripts !== 'function') Object.assign(self, { Players: { PL, findTeams, attackDirection, decideNumber, labToHex, lookProfiles, guessNumber } });
 
 /* ------------------------------------------------------------------ worker */
