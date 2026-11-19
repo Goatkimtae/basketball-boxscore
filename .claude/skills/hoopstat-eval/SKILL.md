@@ -51,3 +51,9 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - `node research/rim-snap/measure.js`: 네 영상 그림에서 클릭을 최대 20px 옮겨 스냅 오차. 카메라 2대 경기 12장 모두 3px 안, 밴드 13장(골대 보임) 중 12장은 모든 클릭에서 같은 점(눈으로 림 한가운데)
 - 브라우저: `e2e.js hvn --clips left150,right150 --no-players --rim-offset 0,12` 등 네 방향 모두 바른 클릭과 같은 슛 13개
 - `node research/rim-snap/band-template.js make|score`: 스냅으로 만든 밴드 골대 그림 — 확실한 슛 17/29(기준값 13/29), 오검출 10(5)
+
+## 2026-11-19 휘슬 자동 판정(카메라 2대)
+- 라벨: `research/whistles/data/labels-A.json`·`labels-B.json` — 시험 경기 휘슬 같은 소리 22개(멈춤/계속, 이유, 파울 팀, 다시 시작 방법). `during_dead_ball`은 이미 멈춘 뒤의 소리(세지 않음)
+- 소리 목록: `node harness/whistles-run.js <key>` → `_workspace/whistles/<key>.json`, 두 카메라를 합친 `merged.json`
+- 채점(앱과 같은 `Flow.infer`): `node research/whistles/score.js` — 파울 3/3(팀 3/3), 파울 아닌 소리 16개 중 오판 0, 멈춘 뒤 소리 3개 중 0. 규칙을 이 22개로 맞춘 것(표본 안 숫자)
+- 화면 전체 움직임으로 멈춤 판정(두 카메라 합, 휘슬 전 4초 대비)은 멈춤 11개 중 2~5개만 찾음 — 쓰지 않음. 자유투 직전 움직임도 실제 슛과 겹침(`research/whistles/ft.js`)

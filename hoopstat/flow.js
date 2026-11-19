@@ -17,8 +17,12 @@
    Foul ('pan' only): a whistle-like sound after which play stops (players nearly still for a few seconds).
    Free throw ('pan' only): the first shot at the same hoop within 40 s of a foul, taken while players stand still.
    With fixed cameras players walk through the picture after a whistle, so the stoppage test does not
-   work (checked on one game: none of about nine whistles passed). There the whistle-like sounds of
-   0.5 s or more are only listed ('휘슬') for the user to judge in the quick review.
+   work (checked on one game: none of about nine whistles passed; the whole-picture motion did not tell
+   stops from play on 22 labelled sounds either, research/whistles/).
+   Two fixed cameras: a whistle while a shot reaches the rim, and the very next shot of the game at the
+   same hoop 8-40 s later, is a shooting foul and its free throw (22 labelled sounds of one game: the 3
+   fouls found, no false ones). The other whistle-like sounds are closed as not fouls (a foul without
+   free throws is not counted). One fixed camera: the sounds are listed ('휘슬') for the user to judge.
    Team rule: one free throw per shooting foul. */
 'use strict';
 (function (root) {
@@ -46,9 +50,11 @@
     // in 0.2 s slots, as a share of its 75th percentile slot (the median can be 0 when frames repeat). Checked on
     // one game: practice up to about 0.3, game shots 0.52 and up. The other camera must move at least PRACTICE_OTHER of its scale.
     PRACTICE: 0.4, PRACTICE_OTHER: 0.2,
-    // two fixed cameras: a whistle stopped play (stoppedTwo): both cameras' motion 1-5 s and 1-12 s after it, as a
-    // share of the 4 s before, and the least motion before (play was on)
-    STOP2_5: 0.6, STOP2_12: 0.8, STOP2_MIN: 0.8,
+    // two fixed cameras: a shooting foul is a whistle while a shot reaches the rim (the shot first seen at rim height
+    // up to FOUL_BEFORE before the whistle or FT2_SHOT after it; measured 0.1-0.4 s before on the 3 labelled fouls,
+    // sounds 0.8-1.4 s before a shot were not fouls), then the next shot at the same hoop FT2_MIN-FT_MAX s later
+    // (measured 13-14 s; a live second shot at that hoop came 6.7 s after the first)
+    FT2_SHOT: 0.5, FT2_MIN: 8,
   };
   const r1 = (x) => Math.round(x * 10) / 10;
   const isShot = (e) => e.type === '야투' || e.type === '자유투';
@@ -112,15 +118,6 @@
       for (let k = Math.ceil(t1 / 0.2); k * 0.2 < t2; k++) if (slot.has(k)) { a += slot.get(k); n += 1; }
       return n >= 3 ? a / n / sc : null;
     } };
-  }
-  /** Two fixed cameras: did play stop after this whistle? Both cameras' motion together (players crossing from one
-      half to the other keep moving in the sum): after (1-5 s and 1-12 s) much less than before (4 s), and play was
-      on before. See research/whistles/ for the labels these limits were set on. */
-  function stoppedTwo(slots, w) {
-    const sum = (t1, t2) => { let a = 0, n = 0; for (const m of slots) { const v = m && m.mean(t1, t2); if (v != null) { a += v; n++; } } return n ? a : null; };
-    const before = sum(w.t - 4, w.t), a5 = sum(w.t + 1, w.t + 5), a12 = sum(w.t + 1, w.t + 12);
-    if (before == null || a5 == null || a12 == null || before < P.STOP2_MIN) return false;
-    return a5 / before < P.STOP2_5 && a12 / before < P.STOP2_12;
   }
   function splitPractice(cams) {
     const mos = cams.map((c) => slotMotion(c.track, c.offset || 0));
@@ -306,17 +303,25 @@
     const all = [...(result.shots || [])].sort((a, b) => a.start - b.start);
     const { kept, dropped } = mode === 'pan' ? dropConflicts(all, segs) : { kept: all, dropped: [] };
     const whistles = [...(result.whistles || [])].sort((a, b) => a.t - b.t);
-    const slots = two ? cams.map((c) => slotMotion(c.track, c.offset || 0)) : [];
-    const fouls = mode === 'pan' ? whistles.filter((w) => stopped(mos.map((x) => x.mo), w))
-      : two ? whistles.filter((w) => w.dur >= P.MARK_DUR && stoppedTwo(slots, w)) : [];
+    // whistles that may be fouls: pan camera, play stopped after it; two cameras, every whistle (the free throw decides)
+    let fouls = mode === 'pan' ? whistles.filter((w) => stopped(mos.map((x) => x.mo), w))
+      : two ? whistles.filter((w) => w.dur >= P.MARK_DUR) : [];
     // the most often seen number of each team (players stage): the fallback guess for a player nobody could see
     const fallback = (team) => (result.mostSeen && result.mostSeen[team]) || '';
 
     // shooting fouls: a foul, then the first shot at the same hoop within 40 s, taken while players stand still
     const used = new Set(), trips = [];
     for (const w of fouls) {
-      const near = kept.filter((sh) => !used.has(sh) && sh.start >= w.t - P.FOUL_BEFORE && sh.start <= w.t + P.FOUL_AFTER);
+      const near = kept.filter((sh) => !used.has(sh) && sh.start >= w.t - P.FOUL_BEFORE && sh.start <= w.t + (two ? P.FT2_SHOT : P.FOUL_AFTER));
       const fg = near[near.length - 1] || null;
+      if (two) {
+        // two fixed cameras: the fouled shot must be seen, and the free throw is the very next shot of the game
+        const next = fg && kept.find((sh) => sh.start > fg.start && sh !== fg);
+        if (!next || used.has(next) || next.side !== fg.side || next.start - w.t < P.FT2_MIN || next.start - w.t > P.FT_MAX) continue;
+        used.add(fg); used.add(next);
+        trips.push({ w, fg, ft: next, still: null });
+        continue;
+      }
       const ft = kept.find((sh) => !used.has(sh) && sh !== fg && sh.start > w.t + P.FT_MIN);
       if (!ft || ft.start - w.t > P.FT_MAX) continue;
       const side = fg ? fg.side : two ? ft.side : sideAt(segs, w.t - 1, w.t + 3);
@@ -328,6 +333,7 @@
       trips.push({ w, fg, ft, still });
     }
     const tripOf = new Map(trips.map((tr) => [tr.w, tr]));
+    if (two) fouls = trips.map((tr) => tr.w);
 
     const ev = [];
     const add = (o) => { const e = { player: '', detail: '', result: '', source: '자동', confidence: '낮음', note: '', ...o, time: r1(o.time) }; ev.push(e); return e; };
@@ -351,11 +357,13 @@
       const team = teamOf(ft.side, ft.start), andOne = !!(fg && fg.made);
       if (andOne) fgEvent(fg, '. 슛 직후 휘슬 → 앤드원');
       add({ time: w.t, team: other(team), type: '파울', detail: '슈팅파울', side: ft.side, cam: ft.cam, ...fouler(other(team), fg),
-        note: `${whistleText(w)}, ${ft.start.toFixed(1)}초에 같은 골대에서 선수들이 선 채로 슛 1개 → 슈팅 파울과 자유투로 판단.`
+        note: (still == null ? `${w.t.toFixed(1)}초 슛 순간 휘슬(${w.dur.toFixed(1)}초간), ${ft.start.toFixed(1)}초에 같은 골대에서 다음 슛 → 슈팅 파울과 자유투로 판단(자동).`
+          : `${whistleText(w)}, ${ft.start.toFixed(1)}초에 같은 골대에서 선수들이 선 채로 슛 1개 → 슈팅 파울과 자유투로 판단.`)
           + (fg ? (andOne ? ' 슛이 들어가 앤드원.' : ` ${fg.start.toFixed(1)}초의 실패한 슛은 야투 시도로 세지 않음(FIBA).`) : '') });
       const detail = andOne ? '앤드원' : '2점슛 파울';
       add({ time: ft.start, end: r1(ft.end), team, type: '자유투', detail, result: ft.made ? '성공' : '실패', side: ft.side, cam: ft.cam, ...shooter(ft),
-        note: `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 선수들이 서 있는 가운데 던진 슛(직전 움직임 ${Math.round(still * 100)}%) → 자유투. 팀 규칙: 자유투 1개`
+        note: (still == null ? `${w.t.toFixed(1)}초 슛 순간 휘슬 뒤 ${(ft.start - w.t).toFixed(0)}초 만에 같은 골대에서 던진 다음 슛 → 자유투. 팀 규칙: 자유투 1개`
+          : `${w.t.toFixed(1)}초 휘슬 뒤 같은 골대에서 선수들이 서 있는 가운데 던진 슛(직전 움직임 ${Math.round(still * 100)}%) → 자유투. 팀 규칙: 자유투 1개`)
           + (andOne ? ', 앤드원은 성공 시 1점.' : ", 성공 시 2점. 3점슛을 던지다 당한 파울이면 세부를 '3점슛 파울'로 바꾸면 3점.") });
     }
 
@@ -385,9 +393,9 @@
       for (const w of whistles) {
         if (w.dur < P.MARK_DUR || fouls.includes(w)) continue;
         if (two) {
-          // judged automatically: play did not stop, so not a foul (kept closed for the record, not counted, not reviewed)
+          // judged automatically: no free throw followed, so not counted as a foul (kept closed for the record, not reviewed)
           add({ time: w.t, team: '', type: '휘슬', checked: true, confidence: '자동',
-            note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz) 뒤 경기가 멈추지 않아 파울이 아닌 것으로 판단(자동). 파울이었으면 '수정'에서 바꾸세요.` });
+            note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz) 뒤 자유투가 없어 파울로 세지 않음(자동). 자유투 없는 파울(일반 파울)이었으면 '수정'에서 파울로 바꾸세요.` });
         } else {
           add({ time: w.t, team: '', type: '휘슬',
             note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz). 이 카메라 영상에서는 파울인지 자동으로 가리지 못합니다. 빠른 검토에서 파울이면 팀을 고르고, 아니면 지우세요.` });
@@ -405,7 +413,7 @@
     };
   }
 
-  const Flow = { P, segments, timeOn, motionOf, slotMotion, stoppedTwo, splitPractice, stopped, dropConflicts, possession, guessWhistles, derive, infer };
+  const Flow = { P, segments, timeOn, motionOf, slotMotion, splitPractice, stopped, dropConflicts, possession, guessWhistles, derive, infer };
   if (typeof window !== 'undefined') window.Flow = Flow;
   if (typeof module !== 'undefined') module.exports = Flow;
 })(typeof window !== 'undefined' ? window : globalThis);

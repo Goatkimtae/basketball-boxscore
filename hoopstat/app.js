@@ -536,7 +536,8 @@ async function runAnalysis() {
   const noSound = res.map(soundText).filter(Boolean)[0];
   const sound = noSound ? `${noSound}(파울·자유투는 판정하지 않음)`
     : n.mode === 'pan' ? `휘슬로 보이는 소리 ${n.whistles}번 중 경기가 멈춘 ${n.fouls}번을 파울로 판단`
-      : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라에서는 파울을 자동으로 가리지 않음)`;
+      : n.mode === 'two' ? `휘슬 같은 소리 ${n.whistles}번 중 슛 순간 휘슬 뒤 같은 골대에서 자유투가 나온 ${n.pf}번을 슈팅파울로 판단(나머지는 파울로 세지 않음)`
+        : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라 1대에서는 파울을 자동으로 가리지 않음)`;
   const vis = res.map((r, i) => `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`).join(', ');
   status(`분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
     + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${practiceNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);

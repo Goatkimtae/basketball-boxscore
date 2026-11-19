@@ -157,19 +157,31 @@ test('whistle rows get a guessed team: the defending team of a shot right before
   assert.strictEqual((again.find((e) => (e.note || '').startsWith('w1')).note.match(/팀 추정/g) || []).length, 1);
 });
 
-test('two fixed cameras: a whistle after which both cameras go quiet is a foul with a number; one after which play goes on is closed', () => {
-  // play at the left end: left camera busy; quiet after 30 s for 15 s (a stoppage), busy again from 45 s
-  const tr = (busy) => Array.from({ length: 1200 }, (_, i) => { const t = i / 10; return [t, 1, 0, busy(t) ? 40 : 1]; });
-  const left = tr((t) => t < 30.5 || t > 45), right = tr(() => false);
+test('two fixed cameras: a whistle at a shot, then the next shot at the same hoop 8-40 s later, is a shooting foul with a number; other whistles are closed', () => {
+  const tr = Array.from({ length: 1500 }, (_, i) => [i / 10, 1, 0, 40]);
   const sh = { ...shot(28.5, '왼쪽'), def: { team: '남색', number: '44', guess: false } };
-  const result = { shots: [sh], cams: [{ id: 'A', side: '왼쪽', track: left, offset: 0 }, { id: 'B', side: '오른쪽', track: right, offset: 0 }],
-    whistles: [{ t: 30, dur: 1.2, f: 3300 }, { t: 70, dur: 1.0, f: 3300 }], mostSeen: { 빨강: '9', 남색: '28' } };
+  const result = {
+    shots: [sh, shot(42, '왼쪽', true),                  // 28.8 whistle at 빨강's shot, 42 s: the free throw
+      shot(60, '오른쪽'), shot(61, '왼쪽'),              // 59.6 whistle at 남색's shot, but the next shot is at the other hoop
+      shot(80.9, '왼쪽'), shot(92, '왼쪽')],             // 80 whistle 0.9 s before a shot: not for that shot
+    cams: [{ id: 'A', side: '왼쪽', track: tr, offset: 0 }, { id: 'B', side: '오른쪽', track: tr, offset: 0 }],
+    whistles: [{ t: 28.8, dur: 1.2, f: 3300 }, { t: 59.6, dur: 1.0, f: 3300 }, { t: 70, dur: 1.0, f: 3300 }, { t: 80, dur: 1.0, f: 3300 }],
+    mostSeen: { 빨강: '9', 남색: '28' },
+  };
   const { events } = Flow.infer(result, S);
   const fouls = events.filter((e) => e.type === '파울'), wh = events.filter((e) => e.type === '휘슬');
   assert.strictEqual(fouls.length, 1);
-  assert.strictEqual(fouls[0].team, '남색');            // right after 빨강's missed shot: the defence
+  assert.strictEqual(fouls[0].team, '남색'); assert.strictEqual(fouls[0].detail, '슈팅파울');
   assert.strictEqual(fouls[0].player, '44');            // the shooter's nearest opponent
-  assert.strictEqual(wh.length, 1); assert.ok(wh[0].checked);   // 70 s: play went on -> closed automatically
+  const ft = events.filter((e) => e.type === '자유투');
+  assert.strictEqual(ft.length, 1); assert.strictEqual(ft[0].time, 42); assert.strictEqual(ft[0].team, '빨강');
+  assert.ok(!events.some((e) => e.type === '야투' && e.time === 28.5));   // the missed fouled shot is not a field goal attempt
+  assert.deepStrictEqual(wh.map((e) => e.time), [59.6, 70, 80]);
+  assert.ok(wh.every((e) => e.checked));                // closed automatically, nothing to review
+  // no number seen: the fouling team's most often seen number, marked as a guess
+  const r2 = Flow.infer({ ...result, shots: [shot(28.5, '왼쪽'), shot(42, '왼쪽', true)] }, S);
+  const f2 = r2.events.find((e) => e.type === '파울');
+  assert.strictEqual(f2.player, '28'); assert.ok(f2.playerGuess);
 });
 
 test('a turnover gets the number of the rebounder who started that possession, else the team\'s most often seen number', () => {
