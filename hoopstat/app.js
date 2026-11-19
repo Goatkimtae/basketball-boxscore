@@ -581,7 +581,9 @@ async function findPlayers(jobs, res, off, run, onProgress) {
   // the fallback guess for somebody nobody could see: the team's most often seen number
   const mostSeen = (list) => [...list].sort((a, b) => ((prof[b] && prof[b].seen) || 0) - ((prof[a] && prof[a].seen) || 0))[0] || null;
   S.mostSeen = guessing ? Object.fromEntries(teams().map((t) => [t, mostSeen(rosterList(t))]).filter(([, n]) => n)) : null;
-  const guessIn = (look, reads, list) => (guessing ? (Players.guessNumber(look, reads, list, prof) || (mostSeen(list) ? { number: mostSeen(list) } : null)) : null);
+  // a guess only from the person's look and unsure reads; 'the team's most often seen number' is no better than chance
+  // (labelled test game: shooters 5/20 right, chance about 22%), so a record with nothing to go on keeps no number
+  const guessIn = (look, reads, list) => (guessing ? Players.guessNumber(look, reads, list, prof) : null);
   let auto = 0, guessed = 0;
   for (const x of shotList) {
     const team = Stats.teamFor(x.side, x.t, settingsFor(qOfT(x.t))), list = rosterList(team);
@@ -732,7 +734,7 @@ async function runAnalysis() {
     result = res[0];
     if (bothHoops()) result.both = true;
   }
-  if (withPlayers && S.mostSeen) result.mostSeen = S.mostSeen;
+  // (the team's most often seen number is not used as a guess: measured no better than chance)
   if (stale()) return;
   const s2 = settingsFor(run.q), q = run.q;
   // each quarter is worked out on its own (its own attack direction, no rebound or turnover across quarters)
