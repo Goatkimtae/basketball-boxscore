@@ -58,7 +58,7 @@ function settings() {
 }
 /** the quarter of the videos chosen now (step 2): analyses, the quick review and new records go there */
 const curQ = () => Number($('quarter').value) || 1;
-const qOf = Stats.qOf;
+// qOf(e): the record's quarter (stats.js, shared by the page's scripts)
 function teams() { const s = settings(); return [s.team_left || '팀 A', s.team_right || '팀 B']; }
 let knownTeams = null;
 const flowCtx = () => S.ctx || { mode: twoCam() ? 'two' : 'pan', segs: [] };
