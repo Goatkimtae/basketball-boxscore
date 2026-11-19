@@ -158,4 +158,4 @@ if (require.main === module) {
     process.exit(log.errors.length ? 1 : 0);
   }).catch((e) => { console.error(e.stack || e); process.exit(1); });
 }
-module.exports = { run };
+module.exports = { run, serve };
