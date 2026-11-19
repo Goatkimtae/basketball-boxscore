@@ -46,3 +46,8 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - 골대 클릭 민감도: `node harness/e2e.js hvn --clips left150,right150 --no-players --rim-offset 0,12` — 바른 클릭 13개, 12px 어긋나면 4~5개
 - 사람 위치: `node research/on-court/scan.js <key> --fps 2` 두 카메라 → `analyse.js --user <내보내기 사건 json>`, `motion-check.js`
 - 앱 전체 v9(브라우저, 8분 경기): 슛 41개, 번호 읽음 9(확인 8개 모두 맞음), 추정 23(정답 아는 12개 중 6개), 리바운드 팀 9/11·번호 3/9, 연습으로 뺀 슛 0, 1단계 5분 51초 + 2단계 5분 53초, 오류 없음
+
+## 2026-11-19 림 맞추기
+- `node research/rim-snap/measure.js`: 네 영상 그림에서 클릭을 최대 20px 옮겨 스냅 오차. 카메라 2대 경기 12장 모두 3px 안, 밴드 13장(골대 보임) 중 12장은 모든 클릭에서 같은 점(눈으로 림 한가운데)
+- 브라우저: `e2e.js hvn --clips left150,right150 --no-players --rim-offset 0,12` 등 네 방향 모두 바른 클릭과 같은 슛 13개
+- `node research/rim-snap/band-template.js make|score`: 스냅으로 만든 밴드 골대 그림 — 확실한 슛 17/29(기준값 13/29), 오검출 10(5)
