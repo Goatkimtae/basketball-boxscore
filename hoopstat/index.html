@@ -51,8 +51,9 @@
 
       <label for="cam_offset" class="two-only">두 영상 시작 차이</label>
       <div class="row two-only">
+        <select id="sync_mode" aria-label="두 영상 맞추는 방법"><option value="auto">소리로 자동</option><option value="manual">직접 적은 값</option></select>
         <input id="cam_offset" inputmode="decimal" size="8" placeholder="자동">
-        <span class="muted">초. 오른쪽 영상이 늦게 시작했으면 +, 먼저 시작했으면 −. 분석할 때 소리로 자동으로 맞춥니다.</span>
+        <span class="muted">초. 오른쪽 영상이 늦게 시작했으면 +, 먼저 시작했으면 −. '소리로 자동'이면 분석할 때 맞추고, '직접 적은 값'이면 적은 값을 그대로 씁니다. 값을 바꾸면 오른쪽 카메라 기록의 시각도 함께 옮깁니다.</span>
         <span id="syncInfo" class="muted"></span>
       </div>
 
@@ -113,6 +114,22 @@
   <section class="card" id="step2">
     <h2><span class="num">2</span>자동 분석</h2>
     <div class="row">
+      <label for="video_layout">영상 구성</label>
+      <select id="video_layout"><option value="per">쿼터마다 영상 따로</option><option value="whole">한 영상에 경기 전체(여러 쿼터)</option></select>
+      <label for="q_count">쿼터 수</label><input id="q_count" inputmode="numeric" size="3" value="4">
+      <label for="q_len">쿼터 길이(분)</label><input id="q_len" inputmode="decimal" size="3" value="10">
+      <label for="ot_len">연장(분)</label><input id="ot_len" inputmode="decimal" size="3" value="5">
+    </div>
+    <div id="spanWrap" hidden>
+      <div class="scroll cmp-wrap"><table class="grid" id="spanTable"><thead><tr><th>쿼터</th><th>시작(초)</th><th>끝(초)</th><th>영상 길이</th></tr></thead><tbody></tbody></table></div>
+      <div class="row">
+        <button id="spanAdd" class="ghost">쿼터 추가</button>
+        <button id="spanView" class="ghost">영상 보며 지정…</button>
+        <button id="spanAuto" class="ghost">휴식으로 다시 제안</button>
+        <span id="spanNote" class="muted">분석하면 슛이 오래 없는 휴식 구간으로 쿼터 경계를 제안합니다. 시작·끝을 고치면 기록의 쿼터가 따라 바뀝니다(사람이 고친 기록·번호는 그대로).</span>
+      </div>
+    </div>
+    <div class="row" id="quarterRow">
       <label for="quarter">이 영상의 쿼터</label>
       <select id="quarter"><option value="1">1쿼터</option><option value="2">2쿼터</option><option value="3">3쿼터</option><option value="4">4쿼터</option><option value="5">연장 1</option><option value="6">연장 2</option><option value="7">연장 3</option></select>
       <span id="quarterNote" class="muted">쿼터마다 영상을 따로 분석하면 기록이 쿼터별로 쌓입니다. 다시 분석하면 그 쿼터만 바뀝니다. 새 영상을 고르면 다음 쿼터로 자동으로 넘어갑니다.</span>
@@ -141,6 +158,7 @@
     <div id="paneEvents" role="tabpanel" aria-labelledby="tabEvents">
       <div class="toolbar">
         <button id="numBtn" class="primary">빠른 검토(성공·실패·등번호)</button>
+        <select id="evFilter" aria-label="보여 줄 기록"><option value="">모든 기록</option></select>
         <select id="reviewWhat" aria-label="검토할 기록">
           <option value="">확인할 것 전부</option><option value="결과 미확인">결과 미확인 슛</option>
           <option value="번호">번호 추정·없음</option><option value="휘슬 미판정">휘슬 미판정</option>
@@ -248,6 +266,20 @@
       <button value="new" class="danger">새 경기 시작(지금 기록 지움)</button>
       <button value="cancel" class="ghost">취소</button>
     </div>
+  </form>
+</dialog>
+
+<dialog id="spanDlg" aria-labelledby="spanTitle">
+  <form method="dialog" class="dlg">
+    <h3 id="spanTitle">영상 보며 쿼터 시작·끝 지정</h3>
+    <video id="spanVideo" controls preload="metadata" style="width:100%;max-height:55vh;background:#000"></video>
+    <div class="row">
+      <label for="spanQ">쿼터</label><select id="spanQ"></select>
+      <button type="button" id="spanSetStart">지금 위치 = 시작</button>
+      <button type="button" id="spanSetEnd">지금 위치 = 끝</button>
+      <span id="spanPos" class="muted"></span>
+    </div>
+    <div class="row end"><button value="close" class="primary">닫기</button></div>
   </form>
 </dialog>
 

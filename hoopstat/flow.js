@@ -360,8 +360,8 @@
     const whistleText = (w) => `${w.t.toFixed(1)}초 휘슬(${w.dur.toFixed(1)}초간) 뒤 선수들이 멈춤`;
     const fgEvent = (sh, extra = '') => add({
       time: sh.start, end: r1(sh.end), team: teamOf(sh.side, sh.start), type: '야투', detail: '2점', result: sh.made ? '성공' : '실패',
-      confidence: sh.confidence, side: sh.side, cam: sh.cam, ...shooter(sh),
-      note: '공이 림 높이에 처음 보인 시각(슛을 던진 순간보다 0.3~1초 늦음)'
+      confidence: sh.confidence, side: sh.side, cam: sh.cam, ...shooter(sh), ...(sh.gather && sh.gather.t != null ? { release: r1(sh.gather.t) } : {}),
+      note: '시각은 공이 림 높이에 처음 보인 때(슛을 던진 순간보다 0.3~1초 늦음). 쿼터는 공을 놓은 때(release)로 정함'
         + (sh.made && sh.made_t != null ? `. 성공 근거: ${sh.made_t.toFixed(1)}초에 공이 그물 안으로 떨어짐` : '') + extra,
     });
     for (const sh of kept) if (!used.has(sh)) fgEvent(sh);

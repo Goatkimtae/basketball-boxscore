@@ -52,3 +52,38 @@ test('attack direction per quarter: saved, else the nearest quarter with the hal
   // a quarter only guessed by default does not lead the others
   assert.strictEqual(Stats.dirOf({ 1: { dir: { left: 'B', source: '기본' } } }, 3).source, '기본');
 });
+
+test('one video with several quarters: the quarter of a moment, unsure near an edge or in a break', () => {
+  const spans = [{ q: 1, start: 30, end: 700 }, { q: 2, start: 820, end: 1500 }];
+  assert.deepStrictEqual(Stats.qAt(spans, 300), { q: 1, unsure: false });
+  assert.deepStrictEqual(Stats.qAt(spans, 690), { q: 1, unsure: true });     // 10 s before the end
+  assert.deepStrictEqual(Stats.qAt(spans, 900), { q: 2, unsure: false });
+  assert.strictEqual(Stats.qAt(spans, 760).unsure, true);                      // in the break
+  assert.strictEqual(Stats.qAt([], 5), null);
+});
+
+test('quarter breaks suggested from long quiet stretches without shots, never from the length alone', () => {
+  // four quarters of about 12 min of video each, breaks of 2-3 min; one long quiet free-throw-less stretch inside Q2 (70 s)
+  const shots = [];
+  const play = (a, b) => { for (let t = a; t < b; t += 25) shots.push(t); };
+  play(20, 700); play(860, 1300); play(1370, 1560); play(2000, 2700); play(2850, 3500);
+  const quiet = (t1, t2) => ([[700, 860], [1560, 2000], [2700, 2850]].some(([a, b]) => t1 >= a - 10 && t2 <= b + 10) ? 0.3 : 1);
+  const r = Stats.suggestQuarters({ shots, duration: 3560, nQ: 4, qLen: 600, motion: quiet });
+  assert.ok(r, 'a suggestion');
+  assert.deepStrictEqual(r.spans.map((x) => x.q), [1, 2, 3, 4]);
+  const cuts = r.spans.slice(1).map((x) => x.start);
+  assert.ok(Math.abs(cuts[0] - 780) < 30 && Math.abs(cuts[1] - 1780) < 30 && Math.abs(cuts[2] - 2775) < 30, JSON.stringify(cuts));
+  assert.match(r.why, /슛 없음/);
+  // too few breaks for the quarters asked: no suggestion rather than equal pieces
+  assert.strictEqual(Stats.suggestQuarters({ shots: [10, 20, 30, 40], duration: 3000, nQ: 4, qLen: 600 }), null);
+});
+
+test('quarter totals add up to the whole game; percentages come from the counts, not averaged', () => {
+  const sh = (q, team, made, kind = '2점') => ({ q, time: 10, team, type: '야투', detail: kind, result: made ? '성공' : '실패' });
+  const ev = [sh(1, 'A', true), sh(1, 'A', false), sh(1, 'A', false), sh(2, 'A', true, '3점'), { q: 2, time: 5, team: 'A', type: '자유투', detail: '2점슛 파울', result: '성공' },
+    { q: 1, time: 9, team: 'A', type: '리바운드', detail: '공격' }, { q: 2, time: 9, team: 'A', type: '턴오버' }, { q: 5, time: 1, team: 'A', type: '파울' }];
+  const whole = Stats.boxScore(ev, ['A', 'B']).teams[0][1];
+  const per = Stats.quartersIn(ev).map((q) => Stats.boxScore(ev.filter((e) => Stats.qOf(e) === q), ['A', 'B']).teams[0][1]);
+  for (const k of Stats.COLS.filter((c) => !c.endsWith('%'))) assert.strictEqual(per.reduce((a, t) => a + t[k], 0), whole[k], k);
+  assert.strictEqual(whole['FG%'], 50);              // 2 of 4, not the mean of 33.3 and 100
+});

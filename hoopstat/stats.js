@@ -147,6 +147,62 @@ function linescore(events, teams) {
 /** records in time order: quarter by quarter */
 const byTime = (a, b) => qOf(a) - qOf(b) || a.time - b.time;
 
+/* ------------------------------------------------------------------ quarters inside one video
+   A video holding several quarters has spans [{q, start, end}] in video seconds (camera A / the record's clock).
+   The quarter of a moment is the span holding it; outside every span (a break, before the start) or within NEAR s
+   of a span's edge it is marked unsure, so the user can check it. */
+const QB = { NEAR: 15, MIN_BREAK: 60, MIN_SHARE: 0.6 };
+function qAt(spans, t) {
+  const list = (spans || []).filter((x) => x && x.start != null && x.end != null).sort((a, b) => a.start - b.start);
+  if (!list.length) return null;
+  const inside = list.find((x) => t >= x.start && t < x.end);
+  if (inside) return { q: inside.q, unsure: t - inside.start < QB.NEAR || inside.end - t < QB.NEAR };
+  // in a break or outside: the nearest span
+  const near = list.reduce((a, x) => (Math.min(Math.abs(t - x.start), Math.abs(t - x.end)) < Math.min(Math.abs(t - a.start), Math.abs(t - a.end)) ? x : a));
+  return { q: near.q, unsure: true };
+}
+/** Suggested quarter spans for a video holding nQ quarters: the nQ-1 longest breaks in play (no shot for at least
+    MIN_BREAK s, quieter than usual when motion(t1, t2) -> share of the usual motion is given). A quarter is at least
+    MIN_SHARE of qLen seconds of video (the clock stops, so a quarter takes longer than its game time, never much less).
+    Returns {spans: [{q, start, end}], breaks: [{from, to, len, motion}], why} or null. */
+function suggestQuarters({ shots, duration, nQ, qLen, motion }) {
+  const ts = [...shots].sort((a, b) => a - b);
+  if (nQ < 2 || ts.length < 2) return null;
+  const gaps = [];
+  for (let i = 0; i + 1 < ts.length; i++) {
+    const len = ts[i + 1] - ts[i];
+    if (len < QB.MIN_BREAK) continue;
+    const m = motion ? motion(ts[i] + 5, ts[i + 1] - 5) : null;
+    gaps.push({ from: ts[i], to: ts[i + 1], len, motion: m, score: len * (m == null ? 1 : Math.max(0.2, 1.5 - m)) });
+  }
+  // the best set of nQ-1 breaks that leaves every quarter long enough
+  const minLen = QB.MIN_SHARE * qLen;
+  const cand = [...gaps].sort((a, b) => b.score - a.score).slice(0, 12);
+  let best = null;
+  const choose = (k, start, picked) => {
+    if (picked.length === nQ - 1) {
+      const cuts = [...picked].sort((a, b) => a.from - b.from);
+      const edges = [0, ...cuts.map((g) => (g.from + g.to) / 2), duration];
+      if (edges.some((e, i) => i && e - edges[i - 1] < minLen)) return;
+      const sc = cuts.reduce((a, g) => a + g.score, 0);
+      if (!best || sc > best.sc) best = { sc, cuts };
+      return;
+    }
+    for (let i = start; i < cand.length; i++) choose(k, i + 1, [...picked, cand[i]]);
+  };
+  choose(0, 0, []);
+  if (!best) return null;
+  const cuts = best.cuts;
+  const spans = [];
+  for (let i = 0; i < nQ; i++) {
+    const start = i === 0 ? Math.max(0, ts[0] - 30) : Math.round((cuts[i - 1].from + cuts[i - 1].to) / 2);
+    const end = i === nQ - 1 ? duration : Math.round((cuts[i].from + cuts[i].to) / 2);
+    spans.push({ q: i + 1, start: Math.round(start), end: Math.round(end) });
+  }
+  const why = cuts.map((g, i) => `${quarterName(i + 1)}→${quarterName(i + 2)}: ${Math.round(g.from)}~${Math.round(g.to)}초 슛 없음 ${Math.round(g.len)}초${g.motion != null ? `, 움직임 평소의 ${Math.round(g.motion * 100)}%` : ''}`).join(' · ');
+  return { spans, breaks: cuts.map(({ from, to, len, motion: m }) => ({ from, to, len, motion: m })), why };
+}
+
 /* ------------------------------------------------------------------ attack direction per quarter
    quarters[q].dir = {left: 'A'|'B', switchT, source, how}: team A or B attacks the left hoop in that quarter (until
    switchT, when the two change ends inside the quarter's video). Not set: the nearest quarter that has one (same
@@ -213,6 +269,11 @@ function tombstone(e) {
     edited (manual, with an origin) or deleted (a tombstone in `removed`) is not added again.
     With q, only that quarter is replaced (the new records get q); the other quarters stay as they are. */
 function mergeReanalysis(old, auto, q, removed = []) {
+  if (Array.isArray(q)) {
+    // one video holding several quarters: the new records already carry their quarter; those quarters are replaced
+    const other = old.filter((e) => !q.includes(qOf(e)));
+    return [...other, ...q.flatMap((k) => mergeReanalysis(old.filter((e) => qOf(e) === k), auto.filter((e) => qOf(e) === k), null, removed.filter((r) => (r.q || 1) === k)))].sort(byTime);
+  }
   if (q != null) {
     const other = old.filter((e) => qOf(e) !== q);
     return [...other, ...mergeReanalysis(old.filter((e) => qOf(e) === q), auto.map((e) => ({ ...e, q })), null, removed.filter((r) => (r.q || 1) === q))].sort(byTime);
@@ -241,6 +302,6 @@ function mergeReanalysis(old, auto, q, removed = []) {
   return [...old.filter((e) => e.source !== '자동'), ...fresh].sort(byTime);
 }
 
-const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime, originOf, sameOrigin, tombstone, openItems, playerState, resultState, dirOf };
+const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime, originOf, sameOrigin, tombstone, openItems, playerState, resultState, dirOf, QB, qAt, suggestQuarters };
 if (typeof window !== 'undefined') window.Stats = Stats;
 if (typeof module !== 'undefined') module.exports = Stats;

@@ -12,7 +12,7 @@ const LS_WORK = 'hoopstat.work.v1';
 
 const newVid = () => ({ file: null, url: null, duration: 0, ok: false, name: '' });
 const S = { vids: { A: newVid(), B: newVid() }, events: [], selId: null, workers: [], ctx: null, quarters: {}, removed: [], history: [], runId: 0,
-  teamInfo: { A: {}, B: {} },
+  teamInfo: { A: {}, B: {} }, spans: null,
   reviewing: false, skipped: new Set(), sceneCam: null, sceneToken: 0, grabChain: Promise.resolve() };
 
 /* ------------------------------------------------------------------ storage */
@@ -39,7 +39,8 @@ function profileTemplates(name) {
 /* ------------------------------------------------------------------ settings */
 const APP_VERSION = 'hoopstat-v13';   // the same as VERSION in sw.js (a test checks)
 /* ------------------------------------------------------------------ settings (continued) */
-const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title', 'quarter'];
+const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title', 'quarter',
+  'sync_mode', 'video_layout', 'q_count', 'q_len', 'ot_len'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
 const twoCam = () => $('cam_mode').value === 'two';
 function settings() {
@@ -57,6 +58,7 @@ function settings() {
   s.colours_known = !!S.coloursKnown;  // the team colours were chosen or found, not just the defaults
   s.removed = S.removed;              // deleted automatic / rebuilt records (not made again)
   s.teamInfo = S.teamInfo;            // per team: where the colour came from (auto / user), the colour seen, evidence
+  s.spans = S.spans;                  // one video holding several quarters: {spans: [{q, start, end}], source, why, video}
   s.history = S.history;              // edits and deletions, newest last
   return s;
 }
@@ -244,8 +246,8 @@ async function chooseVideo(cam, input) {
   if (known) {
     $('quarter').value = known[0]; why = `전에 ${Stats.quarterName(Number(known[0]))}로 분석한 영상을 다시 연결`;
   } else {
-    // the other camera of a pair just chosen goes with it
-    const partner = S.setChoice && S.setChoice.cam !== cam && Date.now() - S.setChoice.at < 10 * 60 * 1000;
+    // the other camera of a pair being chosen goes with it (a pair is complete once both cameras are in)
+    const partner = twoCam() && S.setChoice && !S.setChoice.cams.includes(cam) && Date.now() - S.setChoice.at < 10 * 60 * 1000;
     if (S.events.length && !partner) {
       const ans = await askDialog($('newVidDlg'), `${f.name}: 지금 기록(${Stats.quartersIn(S.events).map(Stats.quarterName).join('·')})과 어떻게 연결할까요? 새 경기를 시작하면 지금 기록은 지워집니다(필요하면 먼저 '작업 저장').`);
       if (ans === 'cancel') { input.value = ''; return; }
@@ -253,7 +255,7 @@ async function chooseVideo(cam, input) {
       else if (ans === 'next') { $('quarter').value = String(inName || Math.min(7, Math.max(0, ...Stats.quartersIn(S.events)) + 1)); why = '같은 경기의 다음 쿼터'; }
       else why = `${Stats.quarterName(before)} 영상을 바꿈(다시 분석하면 이 쿼터의 자동 기록만 바뀜)`;
     } else if (!S.events.length && inName) { $('quarter').value = String(inName); why = '파일 이름'; }
-    S.setChoice = { cam, at: Date.now() };
+    S.setChoice = partner ? { ...S.setChoice, cams: [...S.setChoice.cams, cam] } : { cams: [cam], at: Date.now() };
   }
   if (curQ() !== before) restoreQuarter();
   if (why) $('quarterNote').textContent = `${Stats.quarterName(curQ())}: ${why}. 다르면 '이 영상의 쿼터'를 바꾸세요.`;
@@ -491,37 +493,47 @@ async function findPlayers(jobs, res, off, run, onProgress) {
     return { side: vi ? '오른쪽' : '왼쪽', hoop: { x: medOf('x'), y: medOf('y') },
       people: out.filter((_, i) => taskVi[i] === vi).flatMap((r) => r.people).map((p) => ({ ...p, t: clock(j.cam, p.t) })) };
   }).filter(Boolean) : [];
-  const q = run.q, prev = S.quarters[q] && S.quarters[q].dir, userDir = prev && prev.source === '사람';
   // which found team is team A (the page's first team): its number list first, then its colour
   const ident = found ? identify(found) : null;
-  // a video holding both halves: the time the teams changed ends (unless the user set it)
-  let switchT = prev && prev.switchSource === '사람' ? prev.switchT : null, switchSource = prev && prev.switchSource === '사람' ? '사람' : null;
-  if (found && switchSource !== '사람') {
-    const sw = Players.findSwitch(Players.directionItems(found, shotList, camsDir));
-    if (sw) { switchT = Math.round(sw.t); switchSource = '자동'; notes.push(`두 팀이 ${switchT}초쯤 골대를 바꿈(전반·후반이 한 영상에 있음)`); }
-  }
-  const more = found ? camsDir.map((c) => Players.defenceScore(found, c.people, c.hoop, c.side, switchT)) : [];
-  const autoDir = found ? Players.attackDirection(found, shotList, switchT, more) : null;
-  let dirHow = '';
-  if (autoDir) {
+  // the attack direction of each quarter (one window: the quarter analysed; a video holding several quarters: each span)
+  const windows = run.windows || [{ q: run.q, from: -Infinity, to: Infinity }];
+  const evid = windows.map((w) => {
+    const inW = (t) => t >= w.from && t < w.to, prev = S.quarters[w.q] && S.quarters[w.q].dir;
+    let switchT = prev && prev.switchSource === '사람' ? prev.switchT : null, switchSource = switchT != null ? '사람' : null;
+    const sl = shotList.filter((x) => inW(x.t)), cd = camsDir.map((c) => ({ ...c, people: c.people.filter((p) => inW(p.t)) }));
+    // a video holding both halves of one quarter's worth of play: the time the teams changed ends
+    if (found && switchSource !== '사람' && windows.length === 1) {
+      const sw = Players.findSwitch(Players.directionItems(found, sl, cd));
+      if (sw) { switchT = Math.round(sw.t); switchSource = '자동'; notes.push(`두 팀이 ${switchT}초쯤 골대를 바꿈(전반·후반이 한 영상에 있음)`); }
+    }
+    const more = found ? cd.map((c) => Players.defenceScore(found, c.people, c.hoop, c.side, switchT)) : [];
+    const autoDir = found ? Players.attackDirection(found, sl, switchT, more) : null;
     const pics = more.reduce((a, m) => a + m.pictures, 0);
-    dirHow = `슈터 ${Math.abs(autoDir.shooters)}표${pics ? `, 수비 위치 ${Math.abs(more.reduce((a, m) => a + m.score, 0))}표(사진 ${pics}장)` : ''}`;
+    const how = autoDir ? `슈터 ${Math.abs(autoDir.shooters)}표${pics ? `, 수비 위치 ${Math.abs(more.reduce((a, m) => a + m.score, 0))}표(사진 ${pics}장)` : ''}` : '';
+    return { w, prev, switchT, switchSource, more, autoDir, how };
+  });
+  // found team index -> A / B; nothing tells: the team found attacking the left hoop (first decided quarter) is A
+  const firstAuto = evid.find((x) => x.autoDir);
+  const idOfFound = (k) => (ident != null ? (k === ident ? 'A' : 'B') : firstAuto ? (k === firstAuto.autoDir.left ? 'A' : 'B') : (k === 0 ? 'A' : 'B'));
+  const dirNotes = [];
+  for (const x of [...evid].sort((a, b) => !!b.autoDir - !!a.autoDir)) {          // decided quarters first, the rest follow them
+    const q = x.w.q, base = { switchT: x.switchT, switchSource: x.switchSource };
+    if (x.prev && x.prev.source === '사람') {
+      const agree = !x.autoDir || idOfFound(x.autoDir.left) === x.prev.left;
+      S.quarters[q] = { ...S.quarters[q], dir: { ...x.prev, ...base } };
+      dirNotes.push(`${Stats.quarterName(q)} 사람이 정한 방향${agree ? '' : `(영상으로는 반대로 보임: ${x.how})`}`);
+    } else if (x.autoDir) {
+      S.quarters[q] = { ...(S.quarters[q] || {}), dir: { left: idOfFound(x.autoDir.left), ...base, source: '자동', how: x.how, score: x.autoDir.score } };
+      dirNotes.push(`${Stats.quarterName(q)} ${x.how}`);
+    } else {
+      if (S.quarters[q]) delete S.quarters[q].dir;
+      const d = dirFor(q);
+      S.quarters[q] = { ...(S.quarters[q] || {}), dir: { ...d, ...base, source: d.source === '기본' ? '기본' : '규칙', how: `영상으로 정하지 못함 — ${d.how}` } };
+      dirNotes.push(`${Stats.quarterName(q)} 영상으로 정하지 못함(${d.how}${d.source === '기본' ? ', 1단계 공격 방향 표에서 고르세요' : ''})`);
+    }
   }
-  // found team index -> A / B (no way to tell: the team found attacking the left hoop is A, so the colours stay with the sides)
-  const idOfFound = (k) => (ident != null ? (k === ident ? 'A' : 'B') : autoDir ? (k === autoDir.left ? 'A' : 'B') : (k === 0 ? 'A' : 'B'));
-  let dirNote = '';
-  if (userDir) {
-    const agree = !autoDir || idOfFound(autoDir.left) === prev.left;
-    S.quarters[q] = { ...S.quarters[q], dir: { ...prev, switchT, switchSource } };
-    dirNote = `공격 방향: 사람이 정한 대로 둠${agree ? '' : ` — 영상으로는 반대로 보임(${dirHow})`}`;
-  } else if (autoDir) {
-    S.quarters[q] = { ...(S.quarters[q] || {}), dir: { left: idOfFound(autoDir.left), switchT, switchSource, source: '자동', how: dirHow, score: autoDir.score } };
-    dirNote = `공격 방향: ${dirHow}`;
-  } else {
-    const d = dirFor(q);
-    S.quarters[q] = { ...(S.quarters[q] || {}), dir: { ...d, switchT, switchSource, source: d.source === '기본' ? '기본' : '규칙', how: `영상으로 정하지 못함 — ${d.how}` } };
-    dirNote = `공격 방향을 영상으로 정하지 못함(${d.how}). 틀리면 1단계 '공격 방향' 표에서 고르세요`;
-  }
+  const dirNote = `공격 방향: ${dirNotes.join(' · ')}`;
+  const q = run.q, more = evid.flatMap((x) => x.more), autoDir = firstAuto ? firstAuto.autoDir : null, dirHow = firstAuto ? firstAuto.how : '';
   if (found) {
     // colours: what the video shows, unless the user chose one; names still at their defaults become colour names
     const [ka, kb] = [0, 1].sort((x, y) => (idOfFound(x) === 'A' ? -1 : 1));
@@ -553,7 +565,7 @@ async function findPlayers(jobs, res, off, run, onProgress) {
     others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: autoDir && autoDir.votes, dirScore: autoDir && autoDir.score,
     defence: more.map((m) => ({ score: m.score, near: m.near, pictures: m.pictures })), how: dirHow, ident, dir: dirFor(q),
     shots: shotList.map((x) => [x.cam, Math.round(x.sh.start * 10) / 10, x.side, x.number, x.r.gap, x.r.runReads, x.r.reads.length]) }));
-  const sq = settingsFor(q);
+  const qOfT = (t) => (windows.find((w) => t >= w.from && t < w.to) || windows[0]).q;
   // shooters: a number read surely and on the attacking team's list; otherwise (when allowed) the most likely number of that list
   const guessing = $('auto_guess').checked;
   const prof = Players.lookProfiles(out.flatMap((r) => r.people), [...rosterList(teams()[0]), ...rosterList(teams()[1])]);
@@ -563,7 +575,7 @@ async function findPlayers(jobs, res, off, run, onProgress) {
   const guessIn = (look, reads, list) => (guessing ? (Players.guessNumber(look, reads, list, prof) || (mostSeen(list) ? { number: mostSeen(list) } : null)) : null);
   let auto = 0, guessed = 0;
   for (const x of shotList) {
-    const team = Stats.teamFor(x.side, x.t, sq), list = rosterList(team);
+    const team = Stats.teamFor(x.side, x.t, settingsFor(qOfT(x.t))), list = rosterList(team);
     // the shooter's nearest opponent: who fouled, if this shot was fouled (used when a whistle follows)
     const opp = teams().find((t) => t !== team), olist = rosterList(opp), d = x.r.def;
     if (d) {
@@ -583,7 +595,7 @@ async function findPlayers(jobs, res, off, run, onProgress) {
     const next = shotList.find((y) => y.vi === x.vi && y.side === x.side && y.sh.start > x.sh.end && y.sh.start <= x.sh.end + 3);
     for (const team of teams()) {
       const list = rosterList(team);
-      if (next && next.sh.player && Stats.teamFor(next.side, next.t, sq) === team) { reb[team] = { number: next.sh.player, guess: !!next.sh.playerGuess, how: '연속 슛' }; continue; }
+      if (next && next.sh.player && Stats.teamFor(next.side, next.t, settingsFor(qOfT(next.t))) === team) { reb[team] = { number: next.sh.player, guess: !!next.sh.playerGuess, how: '연속 슛' }; continue; }
       if (x.reb && x.reb.number && list.includes(x.reb.number)) { reb[team] = { number: x.reb.number, guess: false, how: '번호 읽음' }; continue; }
       const g = guessIn(x.reb ? x.reb.look : null, x.reb ? x.reb.reads : [], list);
       if (g) reb[team] = { number: g.number, guess: true, how: '추정' };
@@ -608,11 +620,12 @@ async function runAnalysis() {
   const withPlayers = $('auto_players').checked;
   // this analysis belongs to the quarter and files chosen now; a cancel, a new game or an opened work file in the
   // meantime makes it stale and its results are dropped
-  const run = { id: ++S.runId, q: curQ(), files: jobs.map((j) => j.file) };
+  const run = { id: ++S.runId, q: curQ(), files: jobs.map((j) => j.file), whole: wholeVideo() };
+  S.setChoice = null;                     // the next video chosen starts a new set
   const stale = () => run.id !== S.runId;
   S.mostSeen = null;
   $('runBtn').disabled = true; $('cancelBtn').disabled = false; $('bar').value = 0;
-  for (const id of ['videoInput', 'videoInputB', 'quarter', 'openWork', 'cam_mode']) $(id).disabled = true;
+  for (const id of ['videoInput', 'videoInputB', 'quarter', 'openWork', 'cam_mode', 'video_layout']) $(id).disabled = true;
   status('분석 준비 중… (처음에는 분석 도구를 내려받느라 조금 걸립니다)');
   const t0 = performance.now(), prog = jobs.map(() => ({ frac: 0, eta: null, label: '영상 읽는 중' }));
   const stage1 = withPlayers ? 0.6 : 1;          // share of the bar for the first stage
@@ -636,8 +649,11 @@ async function runAnalysis() {
   let syncNote = '', off = 0;
   if (two) {
     const [a, b] = res;
-    const sy = Sync.offset(a.env, b.env);
-    if (sy.ok) {
+    const sy = $('sync_mode').value === 'manual' ? { ok: false, manual: true } : Sync.offset(a.env, b.env);
+    if (sy.manual) {
+      $('syncInfo').textContent = '직접 적은 값을 씀';
+      syncNote = ` 두 영상 시작 차이는 직접 적은 ${settings().cam_offset}초를 씀.`;
+    } else if (sy.ok) {
       off = Math.round((sy.offset + (a.envStart || 0) - (b.envStart || 0)) * 100) / 100;
       $('cam_offset').value = off.toFixed(2);
       $('syncInfo').textContent = `소리로 자동 맞춤(일치도 ${sy.score})`;
@@ -659,6 +675,22 @@ async function runAnalysis() {
     split.forEach((x, i) => { res[i].shots = x.game; });
     if (out.length) practiceNote = ` 경기가 반대쪽 골대에서 진행 중일 때의 슛 ${out.length}개는 빈 골대 연습으로 보고 뺌(${out.slice(0, 8).map((t) => t.toFixed(0)).join('·')}${out.length > 8 ? '…' : ''}초).`;
   }
+  // one video holding several quarters: the spans the user set, else suggested from the long breaks in play
+  let spanNote = '';
+  if (run.whole) {
+    const shotT = res.flatMap((r, i) => r.shots.map((sh) => sh.start + (i ? off : 0)));
+    const slots = res.map((r, i) => Flow.slotMotion(r.track, i ? off : 0)).filter(Boolean);
+    const motion = slots.length ? (t1, t2) => { const v = slots.map((m) => m.mean(t1, t2)).filter((x) => x != null); return v.length ? v.reduce((x, y) => x + y, 0) / v.length : null; } : null;
+    S.vids.A.duration = S.vids.A.duration || res[0].duration;
+    const vkey = `${run.files[0].name}:${run.files[0].size}`;
+    if (!(S.spans && S.spans.source === '사람' && S.spans.spans.length && (!S.spans.video || S.spans.video === vkey))) {
+      const sg = suggestSpans(shotT, motion);
+      S.spans = sg ? { ...sg, video: vkey } : { spans: [{ q: 1, start: 0, end: Math.round(S.vids.A.duration || 0) }], source: '기본', video: vkey,
+        why: '쿼터 경계를 찾지 못함(쿼터 수만큼 긴 휴식이 보이지 않음) — 영상 보며 지정하세요' };
+    }
+    run.windows = windowsOf(S.spans.spans);
+    spanNote = ` 쿼터 경계(${S.spans.source === '사람' ? '사람이 정함' : S.spans.source === '자동' ? '자동 제안' : '정하지 못함'}): ${S.spans.why}.`;
+  }
   let playersNote = '';
   if (withPlayers) {
     const tp = performance.now();
@@ -679,7 +711,7 @@ async function runAnalysis() {
   let result;
   if (two) {
     const [a, b] = res;
-    const shift = (sh) => ({ ...sh, start: sh.start + off, end: sh.end + off, made_t: sh.made_t == null ? null : sh.made_t + off });
+    const shift = (sh) => ({ ...sh, start: sh.start + off, end: sh.end + off, made_t: sh.made_t == null ? null : sh.made_t + off, gather: sh.gather ? { ...sh.gather, t: sh.gather.t + off } : sh.gather });
     result = {
       shots: [...a.shots.map((sh) => ({ ...sh, cam: 'A' })), ...b.shots.map((sh) => ({ ...shift(sh), cam: 'B' }))],
       cams: [{ id: 'A', side: '왼쪽', track: a.track, offset: 0 }, { id: 'B', side: '오른쪽', track: b.track, offset: off }],
@@ -692,27 +724,45 @@ async function runAnalysis() {
   if (withPlayers && S.mostSeen) result.mostSeen = S.mostSeen;
   if (stale()) return;
   const s2 = settingsFor(run.q), q = run.q;
-  const out = Flow.infer(result, s2);
+  // each quarter is worked out on its own (its own attack direction, no rebound or turnover across quarters)
+  const windows = run.windows || [{ q, from: -Infinity, to: Infinity }];
+  const vkey = `${run.files[0].name}:${run.files[0].size}`;
+  const outs = windows.map((w) => {
+    const inW = (t) => t >= w.from && t < w.to;
+    const rq = { ...result, shots: result.shots.filter((sh) => inW(sh.start)), whistles: (result.whistles || []).filter((x) => inW(x.t)) };
+    const o = Flow.infer(rq, settingsFor(w.q));
+    for (const e of o.events) {
+      e.q = w.q; e.vk = vkey;
+      if (run.whole) { const a = Stats.qAt(S.spans.spans, e.release ?? e.time); e.qUnsure = !!(a && a.unsure); }
+    }
+    return o;
+  });
+  const out = outs[0];
   S.ctx = out.ctx;
-  S.events = Stats.mergeReanalysis(S.events, out.events, q, S.removed);
+  S.events = Stats.mergeReanalysis(S.events, outs.flatMap((o) => o.events), run.whole ? windows.map((w) => w.q) : q, S.removed);
   const fid = (f) => (f ? { name: f.name, size: f.size, lastModified: f.lastModified } : null);
-  S.quarters[q] = { ...(S.quarters[q] || {}), ctx: out.ctx, video: fid(run.files[0]), video_b: two ? fid(run.files[1]) : null,
-    video_name: s2.video_name, video_name_b: two ? s2.video_name_b : '', cam_offset: two ? off : 0,
-    duration: S.vids.A.duration || 0, at: new Date().toISOString() };
-  const n = out.summary;
+  windows.forEach((w, i) => {
+    const sp = run.whole ? S.spans.spans.find((x) => x.q === w.q) : null;
+    S.quarters[w.q] = { ...(S.quarters[w.q] || {}), ctx: outs[i].ctx, video: fid(run.files[0]), video_b: two ? fid(run.files[1]) : null,
+      video_name: s2.video_name, video_name_b: two ? s2.video_name_b : '', cam_offset: two ? off : 0, vk: vkey,
+      span: sp ? { start: sp.start, end: sp.end } : null, duration: S.vids.A.duration || 0, at: new Date().toISOString() };
+  });
+  const n = { ...out.summary };
+  for (const o of outs.slice(1)) for (const [k, v] of Object.entries(o.summary)) if (typeof v === 'number') n[k] += v;
   const noSound = res.map(soundText).filter(Boolean)[0];
   const sound = noSound ? `${noSound}(파울·자유투는 판정하지 않음)`
     : n.mode === 'pan' ? `휘슬로 보이는 소리 ${n.whistles}번 중 경기가 멈춘 ${n.fouls}번을 파울로 판단`
       : n.mode === 'two' ? `휘슬 같은 소리 ${n.whistles}번 중 슛 순간 휘슬 뒤 같은 골대에서 자유투가 나온 ${n.pf}번을 슈팅파울로 판단(나머지는 파울로 세지 않음)`
         : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라 1대에서는 파울을 자동으로 가리지 않음)`;
   const vis = res.map((r, i) => `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`).join(', ');
-  status(`${Stats.quarterName(q)} 분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
-    + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${practiceNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
+  status(`${run.whole ? `경기 전체(${windows.map((w) => Stats.quarterName(w.q)).join('·')})` : Stats.quarterName(q)} 분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
+    + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${practiceNote}${spanNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
   S.analysis = { version: APP_VERSION, at: new Date().toISOString(), mode: two ? '카메라 2대' : '카메라 1대', players: withPlayers ? '켜짐' : '꺼짐', status: $('status').textContent };
   if (res.some((r) => r.visibility['없음'] > 0.7)) alert("골대를 거의 찾지 못한 영상이 있습니다. 다른 체육관이나 다른 카메라 위치라면 '새로 만들기'로 체육관 설정을 새로 만들어 주세요.");
   changed();
   // with everything filled in automatically nothing may be left to check
-  const oc = openCounts(q), left = Object.values(oc).reduce((a, b) => a + b, 0);
+  const oc = openCounts(run.whole ? null : q), left = Object.values(oc).reduce((a, b) => a + b, 0);
+  if (run.whole) renderSpans();
   status($('status').textContent.replace("다음은 '빠른 검토'.", left
     ? `아직 사람이 확인하지 않은 것: ${countsText(oc)}('빠른 검토'에서 종류를 골라 확인). 자동 기록은 틀릴 수 있습니다(사용법의 정확도 참고).`
     : '열린 항목은 없지만 자동 기록은 틀릴 수 있습니다(사용법의 정확도 참고).'));
@@ -728,9 +778,103 @@ $('auto_guess').checked = lsGet('hoopstat.autoGuess', true) !== false;
 $('auto_guess').addEventListener('change', () => lsSet('hoopstat.autoGuess', $('auto_guess').checked));
 function finish() {
   $('runBtn').disabled = false; $('cancelBtn').disabled = true;
-  for (const id of ['videoInput', 'videoInputB', 'quarter', 'openWork', 'cam_mode']) $(id).disabled = false;
+  for (const id of ['videoInput', 'videoInputB', 'quarter', 'openWork', 'cam_mode', 'video_layout']) $(id).disabled = false;
 }
 $('cancelBtn').addEventListener('click', () => { S.runId++; stopWorkers(); finish(); status('분석을 취소했습니다. 이 분석의 결과는 기록에 넣지 않습니다.'); });
+
+/* ------------------------------------------------------------------ quarters inside one video (step 2) */
+const wholeVideo = () => $('video_layout').value === 'whole';
+function applyLayout() {
+  $('spanWrap').hidden = !wholeVideo();
+  $('quarterRow').hidden = wholeVideo();
+}
+const fmtClock = (sec) => { const t = Math.max(0, Math.round(sec)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+/** windows of the record's clock for each quarter of one video: cut halfway through each break */
+function windowsOf(spans) {
+  const list = [...spans].filter((x) => x.start != null && x.end != null).sort((a, b) => a.start - b.start);
+  return list.map((x, i) => ({ q: x.q, from: i ? (list[i - 1].end + x.start) / 2 : -Infinity, to: i + 1 < list.length ? (x.end + list[i + 1].start) / 2 : Infinity }));
+}
+function renderSpans() {
+  const sp = (S.spans && S.spans.spans) || [];
+  $('spanTable').tBodies[0].replaceChildren(...sp.map((x, i) => {
+    const tr = document.createElement('tr');
+    const qs = document.createElement('select');
+    for (let q = 1; q <= 7; q++) qs.append(new Option(Stats.quarterName(q), String(q)));
+    qs.value = String(x.q);
+    const inp = (k) => { const el = document.createElement('input'); el.inputMode = 'decimal'; el.size = 7; el.value = x[k] ?? ''; el.addEventListener('change', () => editSpan(i, { [k]: num(el.value) })); return el; };
+    qs.addEventListener('change', () => editSpan(i, { q: Number(qs.value) }));
+    tr.append(tdOf(qs), tdOf(inp('start')), tdOf(inp('end')), cell(x.start != null && x.end != null ? fmtClock(x.end - x.start) : ''));
+    return tr;
+  }));
+  if (S.spans && S.spans.why) $('spanNote').textContent = `${S.spans.source === '사람' ? '사람이 고친 경계' : S.spans.source === '자동' ? '자동 제안' : ''}: ${S.spans.why}`;
+}
+/** quarter spans changed: each record of this video goes to the quarter holding it (by the moment the shot left the
+    hand when known); a record whose team came from the hoop follows the new quarter's direction; everything the user
+    did to the records stays */
+function editSpan(i, change) {
+  S.spans = S.spans || { spans: [], source: '사람', why: '' };
+  if (i == null) S.spans.spans.push(change); else Object.assign(S.spans.spans[i], change);
+  S.spans.source = '사람';
+  S.spans.why = '사람이 정함';
+  reassignQuarters();
+}
+function reassignQuarters() {
+  const sp = (S.spans && S.spans.spans) || [];
+  if (!sp.length) { render(); save(); return; }
+  let moved = 0;
+  for (const e of S.events) {
+    if (S.spans.video && e.vk && e.vk !== S.spans.video) continue;
+    const a = Stats.qAt(sp, e.release ?? e.time);
+    if (!a) continue;
+    const old = qOf(e);
+    e.qUnsure = a.unsure;
+    if (a.q === old) continue;
+    const swap = !e.derived && e.team && e.source === '자동' && !e.edited
+      && Stats.teamFor('왼쪽', e.time, settingsFor(old)) !== Stats.teamFor('왼쪽', e.time, settingsFor(a.q));
+    e.q = a.q; moved++;
+    if (swap) { const id = idOf(e.team); if (id) { e.team = nameOf(otherId(id)); e.tid = otherId(id); } }
+  }
+  for (const x of sp) if (S.quarters[x.q]) S.quarters[x.q].span = { start: x.start, end: x.end };
+  S.history.push({ at: new Date().toISOString(), action: '쿼터 경계', id: null, before: '', after: sp.map((x) => `${Stats.quarterName(x.q)} ${x.start}~${x.end}초`).join(', ') });
+  status(`쿼터 경계를 바꿈: 기록 ${moved}개의 쿼터가 바뀜.`);
+  renderSpans();
+  changed();
+}
+$('video_layout').addEventListener('change', () => { applyLayout(); save(); });
+$('spanAdd').addEventListener('click', () => {
+  const sp = (S.spans && S.spans.spans) || [], last = sp[sp.length - 1];
+  editSpan(null, { q: last ? Math.min(7, last.q + 1) : 1, start: last ? last.end : 0, end: S.vids.A.duration ? Math.round(S.vids.A.duration) : null });
+});
+$('spanAuto').addEventListener('click', () => {
+  const sg = suggestSpans();
+  if (!sg) { alert('슛이 오래 없는 휴식 구간을 쿼터 수만큼 찾지 못했습니다. 영상 보며 시작·끝을 지정해 주세요.'); return; }
+  S.spans = { ...sg, video: S.spans && S.spans.video };
+  reassignQuarters();
+});
+/** suggested spans from the record's shots and the camera motion saved with the analysis */
+function suggestSpans(shotTimes, motion) {
+  const shots = shotTimes || S.events.filter((e) => isShot(e)).map((e) => e.release ?? e.time);
+  const nQ = Math.max(1, parseInt($('q_count').value, 10) || 4), qLen = (num($('q_len').value) || 10) * 60;
+  const duration = S.vids.A.duration || Math.max(0, ...shots) + 30;
+  const r = Stats.suggestQuarters({ shots, duration, nQ, qLen, motion });
+  return r ? { spans: r.spans, source: '자동', why: r.why } : null;
+}
+$('spanView').addEventListener('click', () => {
+  if (!S.vids.A.url) { alert('1단계에서 경기 영상을 먼저 고르세요.'); return; }
+  const v = $('spanVideo');
+  if (v.src !== S.vids.A.url) v.src = S.vids.A.url;
+  const sp = (S.spans && S.spans.spans) || [];
+  $('spanQ').replaceChildren(...[...new Set([...sp.map((x) => x.q), 1, 2, 3, 4])].sort((a, b) => a - b).map((q) => new Option(Stats.quarterName(q), String(q))));
+  $('spanDlg').showModal();
+});
+$('spanVideo').addEventListener('timeupdate', () => { $('spanPos').textContent = `영상 ${$('spanVideo').currentTime.toFixed(1)}초`; });
+for (const [id, k] of [['spanSetStart', 'start'], ['spanSetEnd', 'end']]) {
+  $(id).addEventListener('click', () => {
+    const q = Number($('spanQ').value), t = Math.round($('spanVideo').currentTime * 10) / 10;
+    const sp = (S.spans && S.spans.spans) || [], i = sp.findIndex((x) => x.q === q);
+    if (i < 0) editSpan(null, { q, start: k === 'start' ? t : null, end: k === 'end' ? t : null }); else editSpan(i, { [k]: t });
+  });
+}
 
 /* ------------------------------------------------------------------ teams and attack direction (step 1) */
 function tdOf(el) { const td = document.createElement('td'); td.append(el); return td; }
@@ -796,14 +940,26 @@ function render() {
   renderTeams();          // names set by the app (loading, team finding) are what the records use
   S.events.sort(Stats.byTime);
   const manyQ = Stats.quartersIn(S.events).length > 1 || S.events.some((e) => qOf(e) > 1);
+  // which records the table shows: all, one quarter, or those whose quarter is unsure (a break, near a boundary)
+  const fsel = $('evFilter'), fwant = fsel.value, qsAll = Stats.quartersIn(S.events);
+  const nUnsure = S.events.filter((e) => e.qUnsure).length;
+  fsel.replaceChildren(new Option('모든 기록', ''), ...qsAll.map((q) => new Option(Stats.quarterName(q), `q${q}`)), ...(nUnsure ? [new Option(`쿼터 확인 필요 ${nUnsure}개(경계 근처·휴식 중)`, 'unsure')] : []));
+  fsel.value = [...fsel.options].some((o) => o.value === fwant) ? fwant : '';
+  const shown = (e) => (!fsel.value ? true : fsel.value === 'unsure' ? !!e.qUnsure : qOf(e) === Number(fsel.value.slice(1)));
+  const spanOf = (q) => (S.quarters[q] && S.quarters[q].span) || null;
+  const timeText = (e) => {
+    const sp = spanOf(qOf(e)), qn = qOf(e) <= 4 ? `${qOf(e)}Q` : `OT${qOf(e) - 4}`;
+    if (sp && sp.start != null) return `${qn} ${fmtClock(e.time - sp.start)}${e.qUnsure ? '?' : ''} (영상 ${Number(e.time).toFixed(1)})`;
+    return `${manyQ ? `${qn} ` : ''}${Number(e.time).toFixed(1)}`;
+  };
   const tb = $('eventTable').tBodies[0];
-  tb.replaceChildren(...S.events.map((e) => {
+  tb.replaceChildren(...S.events.filter(shown).map((e) => {
     const tr = document.createElement('tr');
     tr.dataset.id = e.id;
     if (e.id === S.selId) tr.className = 'sel';
     const src = cell(''); const pill = document.createElement('span');
     pill.className = `pill ${e.source === '자동' ? 'auto' : 'manual'}`; pill.textContent = e.source || '수동'; src.append(pill);
-    tr.append(cell(`${manyQ ? `${qOf(e) <= 4 ? `${qOf(e)}Q` : `OT${qOf(e) - 4}`} ` : ''}${Number(e.time).toFixed(1)}`), cell(e.teamGuess && e.team ? `${e.team} (추정)` : e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
+    tr.append(cell(timeText(e)), cell(e.teamGuess && e.team ? `${e.team} (추정)` : e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
       cell(e.result, e.result === '성공' ? 'made' : ''), src, cell(e.confidence), cell(e.note, 'note'));
     return tr;
   }));
@@ -889,6 +1045,7 @@ function renderBox() {
   $('playerTables').replaceChildren(...blocks);
 }
 $('boxQuarter').addEventListener('change', renderBox);
+$('evFilter').addEventListener('change', render);
 $('boxGuess').addEventListener('change', () => { lsSet('hoopstat.boxGuess', $('boxGuess').checked); renderBox(); });
 $('boxGuess').checked = lsGet('hoopstat.boxGuess', true) !== false;
 $('eventTable').tBodies[0].addEventListener('click', (ev) => {
@@ -1203,6 +1360,10 @@ function applyWork(s, events) {
   S.coloursKnown = !!s.colours_known;
   S.removed = Array.isArray(s.removed) ? s.removed : [];
   S.teamInfo = s.teamInfo && typeof s.teamInfo === 'object' ? { A: {}, B: {}, ...s.teamInfo } : { A: {}, B: {} };
+  S.spans = s.spans && Array.isArray(s.spans.spans) ? s.spans : null;
+  if (!$('video_layout').value) $('video_layout').value = 'per';
+  if (!$('sync_mode').value) $('sync_mode').value = 'auto';
+  applyLayout();
   S.history = Array.isArray(s.history) ? s.history : [];
   // quarters: a record from before them is all the 1st quarter, analysed from the videos it names
   S.quarters = s.quarters && typeof s.quarters === 'object' ? s.quarters
@@ -1247,7 +1408,26 @@ for (const id of SETTING_IDS) {
     if (id === 'team_left' || id === 'team_right') { if (renameTeams()) { changed(); return; } }
     if (id === 'quarter') restoreQuarter();
     if (id === 'color_left' || id === 'color_right') S.coloursKnown = true;
-    if (id === 'cam_offset' && S.quarters[curQ()]) S.quarters[curQ()].cam_offset = settings().cam_offset;
+    if (id === 'cam_offset') {
+      const x = S.quarters[curQ()], nv = settings().cam_offset, old = x && x.cam_offset != null ? Number(x.cam_offset) : null;
+      $('sync_mode').value = 'manual';
+      if (x && old != null && Math.abs(nv - old) > 0.005) {
+        const vk = x.vk, d = nv - old;
+        let n = 0;
+        for (const e of S.events) {
+          if (e.cam !== 'B' || (vk ? e.vk !== vk : qOf(e) !== curQ())) continue;
+          e.time = Math.round((e.time + d) * 10) / 10;
+          if (e.end != null) e.end = Math.round((e.end + d) * 10) / 10;
+          if (e.release != null) e.release = Math.round((e.release + d) * 10) / 10;
+          n++;
+        }
+        for (const q of Object.keys(S.quarters)) if (!vk || S.quarters[q].vk === vk) S.quarters[q].cam_offset = nv;
+        status(`두 영상 시작 차이를 ${old.toFixed(2)} → ${nv.toFixed(2)}초로 바꿈: 오른쪽 카메라 기록 ${n}개의 시각을 ${d > 0 ? '+' : ''}${d.toFixed(2)}초 옮김. 슛 찾기는 바뀌지 않으니, 크게 바꿨으면 다시 분석하세요.`);
+        if (S.spans && S.spans.spans.length && wholeVideo()) { reassignQuarters(); return; }
+        changed(); return;
+      }
+      if (x) x.cam_offset = nv;
+    }
     if (id === 'color_left' || id === 'color_right') { const t = S.teamInfo[id === 'color_left' ? 'A' : 'B'] = S.teamInfo[id === 'color_left' ? 'A' : 'B'] || {}; t.colourSource = '사람'; }
     render(); save();
   });
