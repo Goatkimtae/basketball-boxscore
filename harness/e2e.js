@@ -2,6 +2,7 @@
    runs the analysis (both stages), reads the results back from the page.
 
      node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "1 2 3|4 5 6"] [--rim-offset dx,dy] [--quarters]
+   --both: one fixed camera showing both hoops (game 'both', clip both150): both rims marked on the one video.
    --quarters: after the first analysis the same clips are chosen again under other names and analysed as the next quarter.
    --swap (with --quarters): before that, the page's teams A and B change places (names, colours, lists): the record's
      teams must follow their lists, and the direction table must say the same team attacks the left hoop.
@@ -34,8 +35,8 @@ function serve(root) {
 async function run(game, opt = {}) {
   const c = H.config(), g = c.games[game], vl = c.videos[g.left], vr = c.videos[g.right];
   const [ka, kb] = (opt.clips || 'left,right').split(',');
-  const clipA = g.clips[ka], clipB = g.clips[kb];
-  for (const f of [clipA, clipB]) if (!f || !fs.existsSync(f)) throw new Error(`clip not found: ${f} (make it with harness/make-clips.sh, list it under games.${game}.clips)`);
+  const clipA = g.clips[ka], clipB = opt.both ? null : g.clips[kb];
+  for (const f of opt.both ? [clipA] : [clipA, clipB]) if (!f || !fs.existsSync(f)) throw new Error(`clip not found: ${f} (make it with harness/make-clips.sh, list it under games.${game}.clips)`);
   const { chromium } = require('playwright');
   const srv = await serve(H.ROOT), port = srv.address().port;
   const b = await chromium.launch({ env: { ...process.env, LANG: 'C.UTF-8' } });
@@ -47,13 +48,13 @@ async function run(game, opt = {}) {
   page.on('dialog', (d) => { if (/검토할 기록이 없습니다/.test(d.message())) log.nothingToReview = true; else log.errors.push(`[dialog] ${d.message()}`); d.accept(); });
   try {
     await page.goto(`http://127.0.0.1:${port}/hoopstat/`);
-    await page.selectOption('#cam_mode', 'two');
+    await page.selectOption('#cam_mode', opt.both ? 'both' : 'two');
     if (opt.players === false) await page.uncheck('#auto_players');
     if (opt.names) { await page.fill('#team_left', 'H'); await page.fill('#team_right', 'N'); }
     if (opt.rosters) { const [l, r] = opt.rosters.split('|'); await page.fill('#roster_left', l); await page.fill('#roster_right', r); }
     await page.setInputFiles('#videoInput', clipA);
-    await page.setInputFiles('#videoInputB', clipB);
-    await page.waitForFunction(() => document.getElementById('videoInfo').textContent.includes('×') && document.getElementById('videoInfoB').textContent.includes('×'), null, { timeout: 60000 });
+    if (!opt.both) await page.setInputFiles('#videoInputB', clipB);
+    await page.waitForFunction((both) => document.getElementById('videoInfo').textContent.includes('×') && (both || document.getElementById('videoInfoB').textContent.includes('×')), opt.both, { timeout: 60000 });
     await page.click('#newProfileBtn');
     const setT = async (t) => {
       await page.evaluate((t) => { const r = document.getElementById('pfRange'); r.value = t; r.dispatchEvent(new Event('input')); }, t);
@@ -69,8 +70,15 @@ async function run(game, opt = {}) {
     };
     // --rim-offset dx,dy: click beside the rim (how sensitive is the analysis to a careless click?)
     const [odx, ody] = (opt.rimOffset || '0,0').split(',').map(Number), off = ([x, y]) => [x + odx, y + ody];
-    await setT(vl.rimTime); await clickRim(off(vl.rim));
-    await setT(vr.rimTime); await clickRim(off(vr.rim));
+    if (opt.both) {
+      // one camera showing both hoops: both rims on the same video (the dialog moves on to the right hoop by itself)
+      await setT(vl.rimTime); await clickRim(off(vl.rimL));
+      await page.check('input[name=pfSide][value=오른쪽]');
+      await setT(vl.rimTime); await clickRim(off(vl.rimR));
+    } else {
+      await setT(vl.rimTime); await clickRim(off(vl.rim));
+      await setT(vr.rimTime); await clickRim(off(vr.rim));
+    }
     await page.fill('#pfName', `harness ${game}`); await page.click('#pfSave');
     const t0 = Date.now();
     await page.click('#runBtn');
@@ -135,7 +143,7 @@ async function run(game, opt = {}) {
 if (require.main === module) {
   const a = H.args();
   if (!a._[0]) { console.error('usage: node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "l|r"]'); process.exit(2); }
-  run(a._[0], { clips: a.clips, players: !a['no-players'], names: a.names, rosters: a.rosters, rimOffset: a['rim-offset'], quarters: a.quarters, swap: a.swap, log: (m) => console.log(m) }).then((log) => {
+  run(a._[0], { clips: a.clips, both: !!a.both, players: !a['no-players'], names: a.names, rosters: a.rosters, rimOffset: a['rim-offset'], quarters: a.quarters, swap: a.swap, log: (m) => console.log(m) }).then((log) => {
     const file = H.save(H.out('e2e', `${a._[0]}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), log);
     const shots = log.records.filter((r) => r[3] === '야투' || r[3] === '자유투');
     console.log(`STATUS (${log.seconds}s): ${log.status}`);

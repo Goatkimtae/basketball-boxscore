@@ -103,9 +103,9 @@ function checks(events) {
   const ast = events.filter((e) => e.type === '어시스트').length;
   if (made && !ast) msgs.push(`성공한 야투 ${made}개 중 어시스트가 있었는지는 자동으로 판정하지 않습니다. 장면을 보고 '사건 추가'로 넣어 주세요.`);
   const wh = events.filter((e) => e.type === '휘슬').length;
-  if (wh) msgs.push(`확인할 휘슬 소리 ${wh}개가 있습니다. '빠른 검토'에서 파울이면 파울한 팀을 고르고, 아니면 지워 주세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
+  if (wh) msgs.push(`판정하지 않은 휘슬 소리 ${wh}개(일반 파울·바이얼레이션·아웃·작전타임일 수 있음). '빠른 검토'에서 '휘슬 미판정'을 골라 파울이면 팀을, 아니면 '파울 아님'을 누르세요(휘슬 줄은 박스스코어에 들어가지 않음).`);
   const autoPf = events.filter((e) => e.source === '자동' && e.type === '파울').length;
-  if (autoPf) msgs.push(`자동으로 찾은 파울 ${autoPf}개는 휘슬 뒤 경기가 멈춘 것으로 판단했습니다. 공격자 파울·바이얼레이션이었는지 장면 보기로 확인해 주세요.`);
+  if (autoPf) msgs.push(`자동으로 찾은 파울 ${autoPf}개(고정 카메라: 슛 순간 휘슬 뒤 같은 골대 자유투, 따라 찍는 카메라: 휘슬 뒤 멈춤). 파울한 선수 번호는 대부분 추정이니 장면 보기로 확인해 주세요.`);
   const noNum = events.filter((e) => e.team && !['휘슬'].includes(e.type) && !(e.player || '').trim()).length;
   if (noNum) msgs.push(`등번호가 없는 기록 ${noNum}개는 선수별 기록에서 '미상'으로 묶입니다. '빠른 검토'로 채우면 개인 기록이 나옵니다.`);
   return msgs;
