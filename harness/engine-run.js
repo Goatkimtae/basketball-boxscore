@@ -1,8 +1,8 @@
 /* The app's analysis engine (hoopstat/engine.js) on a whole video, frames from ffmpeg (30 per second,
    768 px wide, as the app processes them).
 
-     node harness/engine-run.js <video key | file> [--template file] [--out file] [--both]
-   --both: one fixed camera showing both hoops (each hoop analysed on its own, DualAnalyzer).
+     node harness/engine-run.js <video key | file> [--template file] [--out file] [--both | --single]
+   --both: one fixed camera showing both hoops (each hoop analysed on its own, DualAnalyzer); --single: the one-hoop-at-a-time Analyzer even then.
 
    Writes _workspace/engine/<key>.json: {shots, ballFrames, visibility, frames, track, seconds}. */
 'use strict';
@@ -30,7 +30,7 @@ if (require.main === module) {
   const a = H.args();
   if (!a._[0]) { console.error('usage: node harness/engine-run.js <video key | file> [--template file] [--out file]'); process.exit(2); }
   const v = H.video(a._[0]);
-  run(v, { template: a.template, both: a.both || v.both }).then((r) => {
+  run(v, { template: a.template, both: !a.single && (a.both || v.both) }).then((r) => {
     const file = H.save(a.out ? H.rel(a.out) : H.out('engine', `${v.key}.json`), r);
     console.log(`${v.key}: ${r.frames} frames, ${r.shots.length} shots (${r.shots.filter((s) => s.made).length} made), ${r.seconds}s -> ${path.relative(H.ROOT, file)}`);
   }).catch((e) => { console.error(e.message || e); process.exit(1); });
