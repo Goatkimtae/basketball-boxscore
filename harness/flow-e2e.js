@@ -81,7 +81,8 @@ async function run(game, opt = {}) {
     let s1 = await state();
     const before = pts(s1);
     const fg = s1.events.find((e) => e.type === '야투' && e.source === '자동' && e.detail === '2점' && e.result === '성공') || s1.events.find((e) => e.type === '야투' && e.source === '자동');
-    await page.dblclick(`#eventTable tbody tr[data-id="${fg.id}"]`);
+    await page.dblclick(`#eventTable tbody tr[data-id="${fg.id}"]`);      // a double-click on the row opens the edit dialog
+    await page.waitForSelector('#eventDlg[open]', { timeout: 5000 });
     await page.selectOption('#evDetail', '3점');
     await page.click('#evOk');
     await page.waitForTimeout(500);

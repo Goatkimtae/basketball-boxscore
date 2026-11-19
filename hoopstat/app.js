@@ -1073,7 +1073,9 @@ $('boxGuess').addEventListener('change', () => { lsSet('hoopstat.boxGuess', $('b
 $('boxGuess').checked = lsGet('hoopstat.boxGuess', true) !== false;
 $('eventTable').tBodies[0].addEventListener('click', (ev) => {
   const tr = ev.target.closest('tr'); if (!tr) return;
-  S.selId = tr.dataset.id; render();
+  // only the highlight changes: rebuilding the rows here would put a new row under the second click of a double-click
+  S.selId = tr.dataset.id;
+  for (const r of $('eventTable').tBodies[0].rows) r.classList.toggle('sel', r.dataset.id === S.selId);
 });
 $('eventTable').tBodies[0].addEventListener('dblclick', (ev) => {
   const tr = ev.target.closest('tr'); if (!tr) return;
