@@ -8,7 +8,21 @@ const EVENT_KO = ['시각(초)', '팀', '등번호', '기록', '세부', '결과
 
 function teamsOf(s) { return [s.team_left || '팀 A', s.team_right || '팀 B']; }
 function titleOf(s) { const [a, b] = teamsOf(s); return s.title || `${a} vs ${b} 박스스코어`; }
-const sorted = (events) => [...events].sort((a, b) => a.time - b.time);
+const sorted = (events) => [...events].sort(Stats.byTime);
+const manyQ = (events) => Stats.quartersIn(events).some((q) => q > 1);
+const qShort = (q) => (q <= 4 ? `${q}Q` : `OT${q - 4}`);
+/** team stats quarter by quarter: [{q, name, teams: [[team, tally]]}] */
+function byQuarter(events, teams) {
+  return Stats.quartersIn(events).map((q) => ({ q, name: Stats.quarterName(q), teams: Stats.boxScore(events.filter((e) => Stats.qOf(e) === q), teams).teams }));
+}
+const Q_COLS = [['득점', (t) => t.PTS], ['야투', (t) => `${t.FGM}/${t.FGA}`], ['3점', (t) => `${t['3PM']}/${t['3PA']}`], ['자유투', (t) => `${t.FTM}/${t.FTA}`],
+  ['리바운드', (t) => t.REB], ['어시스트', (t) => t.AST], ['턴오버', (t) => t.TO], ['파울', (t) => t.PF]];
+/** which team attacked the left hoop in each analysed quarter, as text (null when nothing is saved) */
+function sidesText(s) {
+  const qs = Object.entries(s.quarters || {}).filter(([, x]) => x && x.sides).sort((a, b) => a[0] - b[0]);
+  if (!qs.length) return null;
+  return qs.map(([q, x]) => `${Stats.quarterName(Number(q))}: 왼쪽 골대 ${x.sides[0]}, 오른쪽 골대 ${x.sides[1]}`).join(' · ');
+}
 
 function download(name, blob) {
   const a = document.createElement('a');
@@ -21,7 +35,7 @@ function download(name, blob) {
 
 function csvText(events) {
   const q = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const rows = [EVENT_KO, ...sorted(events).map((e) => [Number(e.time).toFixed(1), ...EVENT_KEYS.slice(1).map((k) => e[k] ?? '')])];
+  const rows = [[...EVENT_KO, '쿼터'], ...sorted(events).map((e) => [Number(e.time).toFixed(1), ...EVENT_KEYS.slice(1).map((k) => e[k] ?? ''), Stats.qOf(e)])];
   return '﻿' + rows.map((r) => r.map(q).join(',')).join('\r\n');
 }
 
@@ -41,6 +55,7 @@ function parseCsv(text) {
     const e = {};
     EVENT_KEYS.forEach((k, i) => { e[k] = r[i] ?? ''; });
     e.time = Number(e.time) || 0;
+    e.q = Number(r[EVENT_KEYS.length]) || 1;
     return e;
   });
 }
@@ -52,6 +67,12 @@ function xlsxBlob(events, s) {
   const aoa = [[titleOf(s)], [`영상: ${s.video_name || ''} · 자동 분석 + 사람 검토 · 출전시간과 +/-는 계산하지 않음`], [],
     ['팀 기록', ...teams]];
   for (const r of Stats.teamCompare(box, teams)) aoa.push([r.label, r.a === String(r.va) ? r.va : r.a, r.b === String(r.vb) ? r.vb : r.b]);
+  if (manyQ(events)) {
+    const ls = Stats.linescore(events, teams);
+    aoa.push([], ['쿼터별 득점', ...ls.qs.map(Stats.quarterName), '합계'], ...ls.rows.map((r) => [r.team, ...r.pts, r.total]));
+    aoa.push([], ['쿼터별 팀 기록', '팀', ...Q_COLS.map(([k]) => k)]);
+    for (const x of byQuarter(events, teams)) for (const [t, st] of x.teams) aoa.push([x.name, t, ...Q_COLS.map(([, f]) => f(st))]);
+  }
   aoa.push([], ['팀', ...Stats.COLS.map((k) => (Stats.KO[k] ? `${k} ${Stats.KO[k]}` : k))]);
   for (const [t, st] of box.teams) aoa.push([t, ...Stats.COLS.map((k) => val(k, st[k]))]);
   const T = Object.fromEntries(box.teams);
@@ -73,9 +94,9 @@ function xlsxBlob(events, s) {
     }
   });
   ws1['!cols'] = [{ wch: 12 }, ...Stats.COLS.map(() => ({ wch: 9 }))];
-  const ws2 = XLSX.utils.aoa_to_sheet([[...EVENT_KO, '득점'], ...sorted(events).map((e) => [Math.round(e.time * 10) / 10,
+  const ws2 = XLSX.utils.aoa_to_sheet([['쿼터', ...EVENT_KO, '득점'], ...sorted(events).map((e) => [Stats.quarterName(Stats.qOf(e)), Math.round(e.time * 10) / 10,
     ...EVENT_KEYS.slice(1).map((k) => e[k] ?? ''), ['야투', '자유투'].includes(e.type) ? Stats.points(e) : ''])]);
-  ws2['!cols'] = [9, 10, 8, 10, 14, 8, 8, 8, 60, 7].map((w) => ({ wch: w }));
+  ws2['!cols'] = [7, 9, 10, 8, 10, 14, 8, 8, 8, 60, 7].map((w) => ({ wch: w }));
   const rules = [['항목', '내용'],
     ['야투(자동)', '골대 근처에서 공이 림 높이 이상 올라간 구간을 슛으로 봅니다. 공이 림 위에 보인 뒤 0.6초 안에 그물 안(림 너비의 0.45배 이내)에서 떨어지는 것이 보이면 성공. 신뢰도 "확인"은 사람이 장면을 보고 확인한 슛입니다.'],
     ['촬영 방식', s.cam_mode === 'two' ? `골대마다 고정 카메라 1대씩. 두 영상의 시작 차이 ${s.cam_offset || 0}초(소리로 맞춤). 시각은 왼쪽 골대 영상 기준.` : '카메라 1대'],
@@ -84,7 +105,8 @@ function xlsxBlob(events, s) {
     ['파울(자동)', '2~4.8kHz의 고른 휘슬 소리 뒤 1~12초 동안 선수들이 거의 멈추면 파울로 봅니다(멈추지 않으면 무시). 그때 공을 가진 팀의 상대 팀 파울로 기록합니다. 슛 직후 휘슬이면 그 슛의 수비 팀 파울.'],
     ['자유투(자동)', '파울 휘슬 뒤 40초 안에 같은 골대에서 선수들이 선 채로 던진 첫 슛 1개를 자유투로 봅니다(자동은 2점슛 파울로 기록, 들어간 슛에 휘슬이면 앤드원).'],
     ['사람이 넣는 기록', '등번호(등번호 넣기), 어시스트, 스틸, 블록, 3점슛, 슛이 아닌 파울'],
-    ['팀', `골대 방향으로 정합니다. 왼쪽 골대 공격 = ${teams[0]}, 오른쪽 골대 공격 = ${teams[1]}${s.switch_time ? ` (영상 ${s.switch_time}초부터 서로 바뀜)` : ''}`],
+    ['팀', `골대 방향으로 정합니다. ${sidesText(s) || `왼쪽 골대 공격 = ${teams[0]}, 오른쪽 골대 공격 = ${teams[1]}${s.switch_time ? ` (영상 ${s.switch_time}초부터 서로 바뀜)` : ''}`}`],
+    ['쿼터', '쿼터마다 영상(카메라 2대면 영상 2개)을 따로 분석합니다. 사건 기록의 시각은 그 쿼터 영상의 시작부터 센 초입니다.'],
     ['2점·3점', '자동 기록은 모두 2점입니다. 3점 라인은 영상으로 판정하지 않습니다.'],
     ['자유투(팀 규칙)', '슈팅 파울은 자유투 1개만 던지고, 성공하면 던지던 슛의 점수(2점슛 파울 2점, 3점슛 파울 3점)를 인정. 앤드원은 1개·1점(KBL).'],
     ['기준 문서', '2026-2027 KBL 경기규칙(득점·파울), FIBA 기록원 매뉴얼 2016(리바운드·어시스트 등 기록 정의)']];
@@ -112,7 +134,16 @@ function htmlText(events, s) {
   const players = Object.entries(box.players).map(([t, ps]) => `<h3>${chip(t)}${esc(t)} · ${T[t].PTS}점</h3><div class="scroll"><table><thead>${head('등번호', true)}</thead><tbody>${
     ps.map(([p, st]) => `<tr><td class="l">${esc(/^\d+$/.test(p) ? `#${p}` : p)}</td>${cells(st)}</tr>`).join('')}<tr class="total"><td class="l">팀 합계</td>${cells(T[t])}</tr></tbody></table></div>`).join('');
   const compare = Stats.teamCompare(box, teams).map((r) => `<tr><td class="l">${r.label}</td><td class="${r.key === 'PTS' && r.va > r.vb ? 'pts' : ''}">${r.a}</td><td class="${r.key === 'PTS' && r.vb > r.va ? 'pts' : ''}">${r.b}</td></tr>`).join('');
-  const pbp = sorted(events).map((e) => `<tr><td>${Number(e.time).toFixed(1)}</td>${['team', 'player', 'type', 'detail', 'result', 'source']
+  const mq = manyQ(events);
+  let quarters = '';
+  if (mq) {
+    const ls = Stats.linescore(events, teams);
+    quarters = `<section><h2>쿼터별 득점</h2><div class="scroll cmp"><table><thead><tr><th class="l">팀</th>${ls.qs.map((q) => `<th>${Stats.quarterName(q)}</th>`).join('')}<th>합계</th></tr></thead><tbody>${
+      ls.rows.map((r) => `<tr><td class="l">${chip(r.team)}${esc(r.team)}</td>${r.pts.map((p) => `<td>${p}</td>`).join('')}<td class="pts">${r.total}</td></tr>`).join('')}</tbody></table></div></section>
+<section><h2>쿼터별 팀 기록</h2><div class="scroll"><table><thead><tr><th class="l">쿼터</th><th class="l">팀</th>${Q_COLS.map(([k]) => `<th>${k}</th>`).join('')}</tr></thead><tbody>${
+      byQuarter(events, teams).map((x) => x.teams.map(([t, st], i) => `<tr><td class="l">${i ? '' : x.name}</td><td class="l">${chip(t)}${esc(t)}</td>${Q_COLS.map(([, f]) => `<td>${f(st)}</td>`).join('')}</tr>`).join('')).join('')}</tbody></table></div></section>`;
+  }
+  const pbp = sorted(events).map((e) => `<tr>${mq ? `<td>${qShort(Stats.qOf(e))}</td>` : ''}<td>${Number(e.time).toFixed(1)}</td>${['team', 'player', 'type', 'detail', 'result', 'source']
     .map((k) => `<td class="l">${esc(k === 'team' && e.teamGuess && e.team ? `${e.team} (추정)` : e[k])}</td>`).join('')}<td class="why">${esc(e.note)}</td></tr>`).join('');
   const notes = Stats.checks(events).map((m) => `<li>${esc(m)}</li>`).join('');
   const sa = T[a] || Stats.tally([]), sb = T[b] || Stats.tally([]);
@@ -140,14 +171,15 @@ tr.total td{font-weight:700;border-top:2px solid var(--line)}.scroll.cmp{max-wid
 <header><p class="eyebrow">영상 자동 분석 + 사람 검토${dur}</p><h1>${esc(titleOf(s))}</h1></header>
 <section class="score" aria-label="점수판">
 <div class="team"><span class="tname">${chip(a)}${esc(a)}</span><span class="big">${sa.PTS}</span><span class="sub">야투 ${sa.FGM}/${sa.FGA} · 리바운드 ${sa.REB} · 어시스트 ${sa.AST}</span></div>
-<div class="vs">왼쪽 골대: ${esc(a)} 공격<br>오른쪽 골대: ${esc(b)} 공격${s.switch_time ? `<br>${esc(s.switch_time)}초부터 방향 교대` : ''}</div>
+<div class="vs">${mq && sidesText(s) ? esc(sidesText(s)).replace(/ · /g, '<br>') : `왼쪽 골대: ${esc(a)} 공격<br>오른쪽 골대: ${esc(b)} 공격${s.switch_time ? `<br>${esc(s.switch_time)}초부터 방향 교대` : ''}`}</div>
 <div class="team r"><span class="tname">${esc(b)}${chip(b)}</span><span class="big">${sb.PTS}</span><span class="sub">야투 ${sb.FGM}/${sb.FGA} · 리바운드 ${sb.REB} · 어시스트 ${sb.AST}</span></div>
 </section>
-<section><h2>팀 기록</h2>
+${quarters}
+<section><h2>팀 기록${mq ? '(경기 전체)' : ''}</h2>
 <div class="scroll cmp"><table><thead><tr><th class="l">항목</th><th>${chip(a)}${esc(a)}</th><th>${chip(b)}${esc(b)}</th></tr></thead><tbody>${compare}</tbody></table></div></section>
 <section><h2>선수별 기록</h2><p class="note">등번호를 모르는 기록은 '미상'으로 묶었습니다. 맨 아래 줄은 팀 합계입니다. 출전시간(MIN)과 +/-는 교체 기록이 없어 계산하지 않았습니다.</p>${players}${notes ? `<ul>${notes}</ul>` : ''}</section>
-<section><h2>사건 기록</h2><p class="note">시각은 영상 시작부터 센 초입니다. 출처 '자동'은 앱이 찾은 기록, '수동'은 사람이 넣거나 고친 기록입니다.</p>
-<div class="scroll"><table><thead><tr><th>시각(초)</th><th class="l">팀</th><th class="l">등번호</th><th class="l">기록</th><th class="l">세부</th><th class="l">결과</th><th class="l">출처</th><th class="l">비고</th></tr></thead><tbody>${pbp}</tbody></table></div></section>
+<section><h2>사건 기록</h2><p class="note">시각은 ${mq ? '그 쿼터 ' : ''}영상 시작부터 센 초입니다. 출처 '자동'은 앱이 찾은 기록, '수동'은 사람이 넣거나 고친 기록입니다.</p>
+<div class="scroll"><table><thead><tr>${mq ? '<th>쿼터</th>' : ''}<th>시각(초)</th><th class="l">팀</th><th class="l">등번호</th><th class="l">기록</th><th class="l">세부</th><th class="l">결과</th><th class="l">출처</th><th class="l">비고</th></tr></thead><tbody>${pbp}</tbody></table></div></section>
 <footer>HoopStat으로 만든 기록 · 이 파일 하나로 열립니다.${s.analysis ? `<br>분석 정보(문제를 알릴 때 이 파일을 보내 주세요): ${esc(s.analysis.version || '')} · ${esc((s.analysis.at || '').slice(0, 16).replace('T', ' '))} UTC · ${esc(s.analysis.mode || '')} · 선수 찾기 ${esc(s.analysis.players || '')} · ${esc(s.analysis.status || '')}` : ''}</footer>
 </main></body></html>`;
 }

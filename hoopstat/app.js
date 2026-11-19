@@ -11,7 +11,7 @@ const LS_PROFILES = 'hoopstat.profiles.v1';
 const LS_WORK = 'hoopstat.work.v1';
 
 const newVid = () => ({ file: null, url: null, duration: 0, ok: false, name: '' });
-const S = { vids: { A: newVid(), B: newVid() }, events: [], selId: null, workers: [], ctx: null,
+const S = { vids: { A: newVid(), B: newVid() }, events: [], selId: null, workers: [], ctx: null, quarters: {},
   reviewing: false, skipped: new Set(), sceneCam: null, sceneToken: 0, grabChain: Promise.resolve() };
 
 /* ------------------------------------------------------------------ storage */
@@ -38,7 +38,7 @@ function profileTemplates(name) {
 /* ------------------------------------------------------------------ settings */
 const APP_VERSION = 'hoopstat-v12';   // the same as VERSION in sw.js (a test checks)
 /* ------------------------------------------------------------------ settings (continued) */
-const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title'];
+const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title', 'quarter'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
 const twoCam = () => $('cam_mode').value === 'two';
 function settings() {
@@ -52,11 +52,18 @@ function settings() {
   s.duration = S.vids.A.duration;
   s.flow = S.ctx;
   s.analysis = S.analysis || null;   // how the last analysis went (app version, status line): saved and exported
+  s.quarters = S.quarters;            // per quarter: its videos, play-flow ctx, which team attacked which hoop
+  s.colours_known = !!S.coloursKnown;  // the team colours were chosen or found, not just the defaults
   return s;
 }
+/** the quarter of the videos chosen now (step 2): analyses, the quick review and new records go there */
+const curQ = () => Number($('quarter').value) || 1;
+const qOf = Stats.qOf;
 function teams() { const s = settings(); return [s.team_left || '팀 A', s.team_right || '팀 B']; }
 let knownTeams = null;
 const flowCtx = () => S.ctx || { mode: twoCam() ? 'two' : 'pan', segs: [] };
+/** the play-flow ctx of a quarter (filming mode, camera looks): the one saved with its analysis */
+const ctxFor = (q) => (S.quarters[q] && S.quarters[q].ctx) || flowCtx();
 
 function save() {
   lsSet(LS_WORK, { settings: settings(), events: S.events, saved: new Date().toISOString() });
@@ -65,7 +72,7 @@ function save() {
 /** After any change to the record: rebuild rebounds/turnovers from the shots as they are now. */
 function changed() {
   for (const e of S.events) if (!e.id) e.id = uid();
-  S.events = Flow.derive(S.events, settings(), flowCtx());
+  S.events = Flow.deriveQuarters(S.events, settings(), ctxFor);
   for (const e of S.events) if (!e.id) e.id = uid();
   render(); save();
 }
@@ -78,7 +85,7 @@ function camOf(e) {
   if (!twoCam()) return 'A';
   if (e.cam === 'A' || e.cam === 'B') return e.cam;
   if (e.side) return e.side === '왼쪽' ? 'A' : 'B';
-  const near = S.events.filter((x) => x.cam && Math.abs(x.time - e.time) <= 6).sort((a, b) => Math.abs(a.time - e.time) - Math.abs(b.time - e.time))[0];
+  const near = S.events.filter((x) => x.cam && qOf(x) === qOf(e) && Math.abs(x.time - e.time) <= 6).sort((a, b) => Math.abs(a.time - e.time) - Math.abs(b.time - e.time))[0];
   if (near) return near.cam;
   return Stats.teamFor('왼쪽', e.time, settings()) === e.team ? 'A' : 'B';
 }
@@ -166,8 +173,21 @@ function setVideo(cam, f) {
     status('이 영상은 브라우저에서 열리지 않습니다. 최신 Edge에서 열어 보거나, 영상을 H.264(mp4)로 변환해 주세요.');
   };
 }
-$('videoInput').addEventListener('change', () => { const f = $('videoInput').files[0]; if (f) setVideo('A', f); });
-$('videoInputB').addEventListener('change', () => { const f = $('videoInputB').files[0]; if (f) setVideo('B', f); });
+/** a video was chosen: pick its quarter. A video analysed before goes back to its quarter; a quarter written in
+    the file name (2쿼터, 2Q, Q2) is used; otherwise a new video while the chosen quarter has records goes to the
+    quarter after the last one with records. */
+function autoQuarter(name) {
+  const before = curQ();
+  const known = Object.entries(S.quarters).find(([, x]) => x && (x.video_name === name || x.video_name_b === name));
+  const m = name.match(/(?:^|[^0-9])([1-4])\s*(?:쿼터|q)(?![a-z])/i) || name.match(/(?:^|[^a-z])q\s*([1-4])(?![0-9])/i);
+  if (known) $('quarter').value = known[0];
+  else if (m) $('quarter').value = m[1];
+  else if (S.events.some((e) => qOf(e) === before)) $('quarter').value = String(Math.min(7, Math.max(...Stats.quartersIn(S.events)) + 1));
+  if (curQ() !== before) restoreQuarter();
+  if (curQ() !== before) $('quarterNote').textContent = `이 영상을 ${Stats.quarterName(curQ())}로 정했습니다(${known ? '전에 분석한 영상' : m ? '파일 이름' : `${Stats.quarterName(before)}에 이미 기록이 있음`}). 다르면 바꾸세요.`;
+}
+$('videoInput').addEventListener('change', () => { const f = $('videoInput').files[0]; if (f) { autoQuarter(f.name); setVideo('A', f); } });
+$('videoInputB').addEventListener('change', () => { const f = $('videoInputB').files[0]; if (f) { autoQuarter(f.name); setVideo('B', f); } });
 
 /* ------------------------------------------------------------------ gym profile dialog */
 const PF = { t: 0, cam: 'A', tBy: { A: 0, B: 0 }, marks: {}, ctx: null };
@@ -326,12 +346,29 @@ function colourName(lab) {
   return best;
 }
 const DEFAULT_TEAMS = ['빨강', '남색'];
+/** Which of the two found teams is the team on the left of the page now (index), or null when nothing tells:
+    the typed / earlier filled number lists first, then the team colours (both colours matching, or one when the
+    colours were chosen by the user or filled by an earlier analysis, not just left at their defaults). */
+function identify(found) {
+  const [l, r] = teams(), L = rosterList(l), R = rosterList(r);
+  const ov = (list, k) => list.filter((n) => found.teams[k].numbers.includes(n)).length;
+  const sc = (ov(L, 0) - ov(L, 1)) - (ov(R, 0) - ov(R, 1));
+  if (sc) return sc > 0 ? 0 : 1;
+  const [fa, fb] = found.teams.map((t) => colourName(t.lab)), [cl, cr] = [$('color_left').value, $('color_right').value];
+  if (fa === fb || cl === cr) return null;
+  if (cl === fa && cr === fb) return 0;
+  if (cl === fb && cr === fa) return 1;
+  if (!S.coloursKnown) return null;
+  if (cl === fa || cr === fb) return 0;
+  if (cl === fb || cr === fa) return 1;
+  return null;
+}
 
 /** Second stage: people, their shirt colours and numbers. Fills in step 1 (team colours and numbers, when the
     number lists are empty) and puts the shooter's number on shots where it was read near the moment the shooter
     held the ball and belongs to the team attacking that hoop. Returns a note for the status line. */
 async function findPlayers(jobs, res, off, onProgress) {
-  const per = (navigator.hardwareConcurrency || 4) >= 8 ? 2 : 1, tasks = [];
+  const per = (navigator.hardwareConcurrency || 4) >= 8 ? 2 : 1, tasks = [], taskVi = [];
   jobs.forEach((j, vi) => {
     const shots = res[vi].shots.map((sh, k) => (sh.gather ? { id: `${j.cam}:${k}`, t: sh.gather.t, x: sh.gather.x, y: sh.gather.y, rimW: sh.gather.rimW, ball: sh.ball || [] } : null)).filter(Boolean);
     // missed shots: who has the ball after it (the rebounder)
@@ -340,6 +377,7 @@ async function findPlayers(jobs, res, off, onProgress) {
     const part = (list, p) => list.filter((_, k) => Math.floor((k * per) / Math.max(1, list.length)) === p);
     for (let p = 0; p < per; p++) {
       tasks.push({ cmd: 'players', file: j.file, procW: PROC_W, people: [(p * dur) / per, ((p + 1) * dur) / per], shots: part(shots, p), rebounds: part(misses, p) });
+      taskVi.push(vi);
     }
   });
   // fetch the models once here, so the workers find them in the cache instead of each downloading them
@@ -367,37 +405,71 @@ async function findPlayers(jobs, res, off, onProgress) {
       t.numbers = t.numbers.filter((n) => keep.includes(n));
     }
   }
-  let dir = found ? Players.attackDirection(found, shotList, settings().switch_time) : null, dirHow = '슈터 셔츠 색';
+  // two fixed cameras: where the people stood (the defence stands nearer the hoop it defends), per camera, on the game clock
+  const camsDir = jobs.length === 2 ? jobs.map((j, vi) => {
+    const hs = res[vi].shots.map((sh) => sh.hoop).filter(Boolean);
+    if (!hs.length) return null;
+    const medOf = (k) => hs.map((h) => h[k]).sort((a, b) => a - b)[Math.floor(hs.length / 2)];
+    return { side: vi ? '오른쪽' : '왼쪽', hoop: { x: medOf('x'), y: medOf('y') },
+      people: out.filter((_, i) => taskVi[i] === vi).flatMap((r) => r.people).map((p) => ({ ...p, t: clock(j.cam, p.t) })) };
+  }).filter(Boolean) : [];
+  // a video holding both halves: the time the teams changed ends (filled in when the box is empty)
+  if (found && settings().switch_time == null) {
+    const sw = Players.findSwitch(Players.directionItems(found, shotList, camsDir));
+    if (sw) { $('switch_time').value = String(Math.round(sw.t)); notes.push(`공격 방향이 ${Math.round(sw.t)}초쯤 바뀜(전반·후반이 한 영상에 있음) — '공격 방향 바뀌는 시각'에 넣음`); }
+  }
+  const swNow = settings().switch_time;
+  const more = found ? camsDir.map((c) => Players.defenceScore(found, c.people, c.hoop, c.side, swNow)) : [];
+  let dir = found ? Players.attackDirection(found, shotList, swNow, more) : null, dirHow = '';
+  if (dir) {
+    const pics = more.reduce((a, m) => a + m.pictures, 0);
+    dirHow = `슈터 ${Math.abs(dir.shooters)}표${pics ? `, 수비 위치 ${Math.abs(more.reduce((a, m) => a + m.score, 0))}표(사진 ${pics}장)` : ''}`;
+  }
+  // which found team is the page's left team now: typed number lists first, then the team colours
+  const ident = found ? identify(found) : null;
   if (found && !dir) {
-    // the team colours chosen on the page tell the two teams apart (both must match, else nothing is decided)
-    const [fa, fb] = found.teams.map((t) => colourName(t.lab)), [cl, cr] = [$('color_left').value, $('color_right').value];
-    if (fa !== fb && cl !== cr) {
-      if (fa === cl && fb === cr) dir = { left: 0 }; else if (fa === cr && fb === cl) dir = { left: 1 };
-      if (dir) dirHow = '고른 팀 색';
+    // the same game's other quarters: the same ends in the same half, the other ends after half time (FIBA 9.5;
+    // overtime goes on like the 4th quarter)
+    const q = curQ(), half = (x) => (x <= 2 ? 1 : 2);
+    const ref = Object.entries(S.quarters).map(([k, x]) => [Number(k), x]).filter(([k, x]) => k !== q && x && x.sides)
+      .sort((a, b) => Math.abs(a[0] - q) - Math.abs(b[0] - q))[0];
+    const [pl, pr] = teams();
+    if (ref && ident != null && ref[1].sides.includes(pl) && ref[1].sides.includes(pr)) {
+      const same = half(ref[0]) === half(q), leftName = same ? ref[1].sides[0] : ref[1].sides[1];
+      dir = { left: leftName === pl ? ident : 1 - ident };
+      dirHow = `${Stats.quarterName(ref[0])}${same ? '와 같은 방향' : '의 반대(후반에 골대를 바꿈)'}으로 추정`;
+    } else if (ident != null) {
+      dir = { left: ident }; dirHow = '고른 팀 색·명단(영상으로는 정하지 못함)';
     }
   }
   console.info('[players]', JSON.stringify({ teams: found && found.teams.map((t) => ({ colour: t.colour, numbers: t.numbers, seen: t.seen })),
-    others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: dir && dir.votes,
+    others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: dir && dir.votes, dirScore: dir && dir.score,
+    defence: more.map((m) => ({ score: m.score, near: m.near, pictures: m.pictures })), how: dirHow, ident,
     shots: shotList.map((x) => [x.cam, Math.round(x.sh.start * 10) / 10, x.side, x.number, x.r.gap, x.r.runReads, x.r.reads.length]) }));
   if (found && dir) {
     const left = found.teams[dir.left], right = found.teams[1 - dir.left];
+    // the page's teams follow the video: the page's left team was found attacking the right hoop -> they change places
+    const moved = ident != null && ident !== dir.left;
+    if (moved) swapSides();
     const filled = [];
     for (const [side, team] of [['left', left], ['right', right]]) {
+      $(`color_${side}`).value = colourName(team.lab);            // the colour seen in the video
       if ($(`roster_${side}`).value.trim()) continue;             // numbers typed by the user stay
       $(`roster_${side}`).value = team.numbers.join(' ');
-      $(`color_${side}`).value = colourName(team.lab);
       filled.push(side);
     }
-    if (filled.length && $('team_left').value.trim() === DEFAULT_TEAMS[0] && $('team_right').value.trim() === DEFAULT_TEAMS[1]) {
+    S.coloursKnown = true;
+    if ($('team_left').value.trim() === DEFAULT_TEAMS[0] && $('team_right').value.trim() === DEFAULT_TEAMS[1]) {
       let [nl, nr] = [$('color_left').value, $('color_right').value];
       if (nl === nr) { nl += ' A'; nr += ' B'; }
       $('team_left').value = nl; $('team_right').value = nr;
     }
+    knownTeams = teams();
     const [ta, tb] = teams();
     notes.push(`팀 자동 찾기(공격 방향: ${dirHow}): 왼쪽 골대 공격 ${ta}(${left.numbers.join('·') || '번호 없음'}), 오른쪽 ${tb}(${right.numbers.join('·') || '번호 없음'})`
-      + (filled.length < 2 ? ' — 이미 적힌 등번호 명단은 그대로 둠' : ''));
+      + (moved ? ' — 영상에 맞춰 두 팀의 왼쪽·오른쪽을 바꿈' : '') + (filled.length < 2 ? ' — 이미 적힌 등번호 명단은 그대로 둠' : ''));
   } else {
-    notes.push(found ? `공격 방향을 셔츠 색으로 가리지 못함(슛이 적거나 섞임). 찾은 두 팀 색: ${found.teams.map((t) => colourName(t.lab)).join('·')} — 팀 색을 이 색으로 골라 두면 다음 분석에서 방향을 정함` : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
+    notes.push(found ? `공격 방향을 정하지 못함(슛·사람이 적게 보임). 찾은 두 팀 색: ${found.teams.map((t) => colourName(t.lab)).join('·')} — 팀 색을 이 색으로 골라 두면 다음 분석에서 방향을 정함` : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
   }
   // shooters: a number read surely and on the attacking team's list; otherwise (when allowed) the most likely number of that list
   const guessing = $('auto_guess').checked;
@@ -528,10 +600,12 @@ async function runAnalysis() {
     result = res[0];
   }
   if (withPlayers && S.mostSeen) result.mostSeen = S.mostSeen;
-  const s2 = settings();
+  const s2 = settings(), q = curQ();
   const out = Flow.infer(result, s2);
   S.ctx = out.ctx;
-  S.events = Stats.mergeReanalysis(S.events, out.events);
+  S.events = Stats.mergeReanalysis(S.events, out.events, q);
+  S.quarters[q] = { ctx: out.ctx, video_name: s2.video_name, video_name_b: two ? s2.video_name_b : '', cam_offset: two ? off : 0,
+    sides: teams(), switch_time: s2.switch_time, duration: S.vids.A.duration || 0, at: new Date().toISOString() };
   const n = out.summary;
   const noSound = res.map(soundText).filter(Boolean)[0];
   const sound = noSound ? `${noSound}(파울·자유투는 판정하지 않음)`
@@ -539,15 +613,18 @@ async function runAnalysis() {
       : n.mode === 'two' ? `휘슬 같은 소리 ${n.whistles}번 중 슛 순간 휘슬 뒤 같은 골대에서 자유투가 나온 ${n.pf}번을 슈팅파울로 판단(나머지는 파울로 세지 않음)`
         : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라 1대에서는 파울을 자동으로 가리지 않음)`;
   const vis = res.map((r, i) => `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`).join(', ');
-  status(`분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
+  status(`${Stats.quarterName(q)} 분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
     + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${practiceNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
   S.analysis = { version: APP_VERSION, at: new Date().toISOString(), mode: two ? '카메라 2대' : '카메라 1대', players: withPlayers ? '켜짐' : '꺼짐', status: $('status').textContent };
   if (res.some((r) => r.visibility['없음'] > 0.7)) alert("골대를 거의 찾지 못한 영상이 있습니다. 다른 체육관이나 다른 카메라 위치라면 '새로 만들기'로 체육관 설정을 새로 만들어 주세요.");
   changed();
   // with everything filled in automatically nothing may be left to check
-  const left = S.events.filter(needsReview).length;
+  const left = S.events.filter((e) => qOf(e) === q && needsReview(e)).length;
   status($('status').textContent.replace("다음은 '빠른 검토'.", left ? `확인이 필요한 기록 ${left}개('빠른 검토'). 번호의 '(추정)'은 가장 가능성 높은 선수.` : "모든 기록에 팀·번호·판정이 자동으로 들어감(번호의 '(추정)'은 가장 가능성 높은 선수). 검토 없이 박스스코어를 쓸 수 있음."));
-  S.analysis.status = $('status').textContent; save();
+  S.analysis.status = $('status').textContent;
+  S.analysis.quarter = Stats.quarterName(q);
+  S.quarters[q].analysis = S.analysis;
+  save();
 }
 $('runBtn').addEventListener('click', runAnalysis);
 $('auto_players').checked = lsGet('hoopstat.autoPlayers', true) !== false;
@@ -564,7 +641,8 @@ function cell(text, cls) { const td = document.createElement('td'); if (cls) td.
 const selIndex = () => S.events.findIndex((e) => e.id === S.selId);
 function render() {
   knownTeams = teams();          // names set by the app (loading, team finding) are what the records use
-  S.events.sort((a, b) => a.time - b.time);
+  S.events.sort(Stats.byTime);
+  const manyQ = Stats.quartersIn(S.events).length > 1 || S.events.some((e) => qOf(e) > 1);
   const tb = $('eventTable').tBodies[0];
   tb.replaceChildren(...S.events.map((e) => {
     const tr = document.createElement('tr');
@@ -572,7 +650,7 @@ function render() {
     if (e.id === S.selId) tr.className = 'sel';
     const src = cell(''); const pill = document.createElement('span');
     pill.className = `pill ${e.source === '자동' ? 'auto' : 'manual'}`; pill.textContent = e.source || '수동'; src.append(pill);
-    tr.append(cell(Number(e.time).toFixed(1)), cell(e.teamGuess && e.team ? `${e.team} (추정)` : e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
+    tr.append(cell(`${manyQ ? `${qOf(e) <= 4 ? `${qOf(e)}Q` : `OT${qOf(e) - 4}`} ` : ''}${Number(e.time).toFixed(1)}`), cell(e.teamGuess && e.team ? `${e.team} (추정)` : e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
       cell(e.result, e.result === '성공' ? 'made' : ''), src, cell(e.confidence), cell(e.note, 'note'));
     return tr;
   }));
@@ -602,7 +680,29 @@ function statRow(label, st, cls) {
   return tr;
 }
 function renderBox() {
-  const tm = teams(), box = Stats.boxScore(S.events, tm);
+  const tm = teams(), qs = Stats.quartersIn(S.events);
+  // points per quarter (shown once a second quarter is there)
+  const ls = Stats.linescore(S.events, tm), many = qs.length > 1 || qs.some((q) => q > 1);
+  $('lineWrap').hidden = !many;
+  if (many) {
+    const hr = document.createElement('tr');
+    hr.append(Object.assign(document.createElement('th'), { textContent: '팀' }), ...ls.qs.map((q) => Object.assign(document.createElement('th'), { textContent: Stats.quarterName(q) })),
+      Object.assign(document.createElement('th'), { textContent: '합계' }));
+    $('lineTable').tHead.replaceChildren(hr);
+    const top = Math.max(...ls.rows.map((r) => r.total));
+    $('lineTable').tBodies[0].replaceChildren(...ls.rows.map((r) => {
+      const tr = document.createElement('tr'), name = cell(''); name.append(chipFor(r.team), document.createTextNode(r.team));
+      tr.append(name, ...r.pts.map((p) => cell(p)), cell(r.total, r.total === top && ls.rows.some((x) => x.total !== top) ? 'lead' : ''));
+      return tr;
+    }));
+  }
+  // which part of the game the tables show: the whole game or one quarter
+  const sel = $('boxQuarter'), want = sel.value;
+  sel.replaceChildren(new Option('경기 전체', ''), ...qs.map((q) => new Option(Stats.quarterName(q), String(q))));
+  sel.value = qs.includes(Number(want)) ? want : '';
+  sel.parentElement.hidden = !many;
+  const part = sel.value ? S.events.filter((e) => qOf(e) === Number(sel.value)) : S.events;
+  const box = Stats.boxScore(part, tm);
   // team comparison
   const h = document.createElement('tr');
   h.append(Object.assign(document.createElement('th'), { textContent: '항목' }));
@@ -630,6 +730,7 @@ function renderBox() {
   });
   $('playerTables').replaceChildren(...blocks);
 }
+$('boxQuarter').addEventListener('change', renderBox);
 $('eventTable').tBodies[0].addEventListener('click', (ev) => {
   const tr = ev.target.closest('tr'); if (!tr) return;
   S.selId = tr.dataset.id; render();
@@ -668,6 +769,7 @@ function openEvent(e, id) {
   $('evTeam').replaceChildren(...teams().map((t) => new Option(t, t)));
   $('evType').replaceChildren(...Stats.TYPES.map((t) => new Option(t, t)));
   $('evTime').value = Number(e.time).toFixed(1);
+  $('evQuarter').value = String(e.q != null ? qOf(e) : curQ());
   if (e.team && ![...$('evTeam').options].some((o) => o.value === e.team)) $('evTeam').append(new Option(e.team, e.team));
   $('evTeam').value = e.team || teams()[0];
   $('evPlayer').value = e.player || '';
@@ -684,7 +786,7 @@ $('eventDlg').addEventListener('close', () => {
   if (t == null) { alert('시각은 초 단위 숫자로 적어 주세요. 예: 83.5'); return; }
   const i = evId == null ? -1 : S.events.findIndex((x) => x.id === evId);
   const base = i < 0 ? {} : S.events[i];
-  const e = { ...base, id: base.id || uid(), time: Math.round(t * 10) / 10, team: $('evTeam').value, player: $('evPlayer').value.trim(), type: $('evType').value,
+  const e = { ...base, id: base.id || uid(), q: Number($('evQuarter').value) || 1, time: Math.round(t * 10) / 10, team: $('evTeam').value, player: $('evPlayer').value.trim(), type: $('evType').value,
     detail: $('evDetail').value, result: $('evResult').disabled ? '' : $('evResult').value, note: $('evNote').value.trim(), source: '수동',
     confidence: base.confidence || '', derived: false, checked: true };
   e.playerAuto = !!base.playerAuto && e.player === base.player;
@@ -697,7 +799,7 @@ $('eventDlg').addEventListener('close', () => {
 $('editBtn').addEventListener('click', () => { if (needSel()) openEvent(S.events[selIndex()], S.selId); });
 $('addBtn').addEventListener('click', () => {
   const base = selIndex() >= 0 ? S.events[selIndex()] : null;
-  openEvent({ time: base ? base.time + 1 : 0, team: teams()[0], type: '리바운드', detail: '수비' }, null);
+  openEvent({ time: base ? base.time + 1 : 0, q: base ? qOf(base) : curQ(), team: teams()[0], type: '리바운드', detail: '수비' }, null);
 });
 $('delBtn').addEventListener('click', () => {
   if (!needSel()) return;
@@ -722,16 +824,28 @@ function rosterOf(team) {
 }
 /** id of the next record to review after the record with this id (or from the start) */
 function nextToReview(afterId) {
-  const n = S.events.length, from = afterId == null ? 0 : S.events.findIndex((e) => e.id === afterId) + 1;
+  const n = S.events.length, from = afterId == null ? 0 : S.events.findIndex((e) => e.id === afterId) + 1, q = curQ();
   for (let k = 0; k < n; k++) {
     const e = S.events[(from + k) % n];
-    if (needsReview(e) && !S.skipped.has(e.id)) return e.id;
+    if (qOf(e) === q && needsReview(e) && !S.skipped.has(e.id)) return e.id;
   }
   return null;
+}
+/** the chosen videos are this quarter's (or nothing says otherwise) */
+function videosOfQuarter(q) {
+  const x = S.quarters[q];
+  if (q !== curQ()) return false;
+  return !x || !x.video_name || !S.vids.A.name || x.video_name === S.vids.A.name;
 }
 async function showScene(id, keepCam) {
   const e = S.events.find((x) => x.id === id);
   if (!e) { $('sceneDlg').close(); return; }
+  if (!videosOfQuarter(qOf(e))) {
+    const x = S.quarters[qOf(e)];
+    alert(`이 기록은 ${Stats.quarterName(qOf(e))} 영상${x && x.video_name ? `(${x.video_name})` : ''}에 있습니다. 2단계 '이 영상의 쿼터'를 ${Stats.quarterName(qOf(e))}로 하고 1단계에서 그 영상을 고르면 장면을 볼 수 있습니다.`);
+    if ($('sceneDlg').open) $('sceneDlg').close();
+    return;
+  }
   S.selId = id; render();
   if (!keepCam) S.sceneCam = camOf(e);
   let cam = S.sceneCam;
@@ -743,7 +857,7 @@ async function showScene(id, keepCam) {
   $('sceneCam').hidden = !(twoCam() && S.vids.A.ok && S.vids.B.ok);
   $('numBar').hidden = !S.reviewing;
   if (S.reviewing) {
-    const left = S.events.filter((x) => needsReview(x) && !S.skipped.has(x.id)).length;
+    const left = S.events.filter((x) => qOf(x) === curQ() && needsReview(x) && !S.skipped.has(x.id)).length;
     const wh = e.type === '휘슬';
     $('resBar').hidden = !isShot(e);
     $('whBar').hidden = !wh;
@@ -821,8 +935,8 @@ $('numBtn').addEventListener('click', () => {
   if (!videosOk()) return;
   S.skipped = new Set();
   const cur = S.events[selIndex()];
-  const start = cur && needsReview(cur) ? cur.id : nextToReview(null);
-  if (start == null) { alert('검토할 기록이 없습니다. 바꾸려면 줄을 두 번 눌러 수정하세요.'); return; }
+  const start = cur && qOf(cur) === curQ() && needsReview(cur) ? cur.id : nextToReview(null);
+  if (start == null) { alert(`${Stats.quartersIn(S.events).length > 1 ? `${Stats.quarterName(curQ())}에 ` : ''}검토할 기록이 없습니다. 바꾸려면 줄을 두 번 눌러 수정하세요.`); return; }
   S.reviewing = true; showScene(start);
 });
 $('resMade').addEventListener('click', () => setResult('성공'));
@@ -909,36 +1023,57 @@ function applyWork(s, events) {
   if (!S.vids.A.duration) S.vids.A.duration = s.duration || 0;
   S.ctx = s.flow || null;
   S.analysis = s.analysis || null;
+  S.coloursKnown = !!s.colours_known;
+  // quarters: a record from before them is all the 1st quarter, analysed from the videos it names
+  S.quarters = s.quarters && typeof s.quarters === 'object' ? s.quarters
+    : (s.video_name || s.flow ? { 1: { ctx: s.flow || null, video_name: s.video_name || '', video_name_b: s.video_name_b || '' } } : {});
   S.events = events; S.selId = null;
-  for (const e of S.events) if (!e.id) e.id = uid();
+  for (const e of S.events) { if (!e.id) e.id = uid(); if (e.q == null) e.q = 1; }
   // a record saved before team renames were carried over can hold a third team in its rebounds/turnovers: rebuild them
   const names = teams();
-  if (S.events.some((e) => e.derived && e.team && !names.includes(e.team))) S.events = Flow.derive(S.events, settings(), flowCtx());
+  if (S.events.some((e) => e.derived && e.team && !names.includes(e.team))) S.events = Flow.deriveQuarters(S.events, settings(), ctxFor);
   for (const e of S.events) if (!e.id) e.id = uid();
   render(); save();
 }
 // Team names as the records know them (kept by render): a name changed after the analysis is changed in the
 // records too (otherwise the rebuilt rebounds and turnovers go to a third team with the new name).
+/** the two teams change ends: names, colours and number lists swap sides (not a rename) */
+function swapSides() {
+  for (const k of ['team', 'color', 'roster']) { const l = $(`${k}_left`).value; $(`${k}_left`).value = $(`${k}_right`).value; $(`${k}_right`).value = l; }
+  knownTeams = teams();
+}
+/** a quarter was chosen: its camera offset and which team attacked which hoop come back (when it was analysed) */
+function restoreQuarter() {
+  const x = S.quarters[curQ()];
+  if (!x) return;
+  if (twoCam() && x.cam_offset != null) $('cam_offset').value = Number(x.cam_offset).toFixed(2);
+  const [l, r] = teams();
+  if (x.sides && x.sides[0] === r && x.sides[1] === l) swapSides();
+}
 function renameTeams() {
   const now = teams(), map = new Map();
   if (!knownTeams) { knownTeams = now; return false; }
-  knownTeams.forEach((old, i) => { if (old && now[i] && old !== now[i] && knownTeams[1 - i] !== old) map.set(old, now[i]); });
+  knownTeams.forEach((old, i) => { if (old && now[i] && old !== now[i] && now[1 - i] !== old) map.set(old, now[i]); });
   knownTeams = now;
   if (!map.size) return false;
   for (const e of S.events) {
     if (map.has(e.team)) e.team = map.get(e.team);
     if (e.reb) e.reb = Object.fromEntries(Object.entries(e.reb).map(([k, v]) => [map.get(k) || k, v]));
   }
+  for (const x of Object.values(S.quarters)) if (x && x.sides) x.sides = x.sides.map((t) => map.get(t) || t);
   return true;
 }
 for (const id of SETTING_IDS) {
   $(id).addEventListener('change', () => {
     if (id === 'cam_mode') applyMode();
     if (id === 'team_left' || id === 'team_right') { if (renameTeams()) { changed(); return; } }
+    if (id === 'quarter') restoreQuarter();
+    if (id === 'color_left' || id === 'color_right') S.coloursKnown = true;
+    if (id === 'cam_offset' && S.quarters[curQ()]) S.quarters[curQ()].cam_offset = settings().cam_offset;
     if (id === 'switch_time') {
       // the teams of the automatic shots follow the new switch time (each shot knows its hoop)
       const s = settings();
-      for (const e of S.events) if (e.side && e.source === '자동' && (e.type === '야투' || e.type === '자유투')) e.team = Stats.teamFor(e.side, e.time, s);
+      for (const e of S.events) if (qOf(e) === curQ() && e.side && e.source === '자동' && (e.type === '야투' || e.type === '자유투')) e.team = Stats.teamFor(e.side, e.time, s);
       changed(); return;
     }
     render(); save();

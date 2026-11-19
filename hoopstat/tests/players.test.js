@@ -54,6 +54,30 @@ test('attack direction: most of a team\'s shots at one hoop; the switch time swa
   assert.strictEqual(P.attackDirection(found, shots.slice(0, 1), null), null, 'one shot is not enough');
 });
 
+test('attack direction from where the players stand: the defence is nearer the hoop it defends', () => {
+  // lab [0] = team 0 (navy), [1] = team 1 (white); navy attacks the right hoop, so navy defends the left one
+  const found = { teams: [{ numbers: ['44'] }, { numbers: ['33'] }], labOf: (lab) => lab[0] };
+  const hoopL = { x: 60, y: 150 }, hoopR = { x: 620, y: 170 };
+  const pic = (t, near, far, hoop) => [0, 1, 2].flatMap((i) => [{ t, lab: [near], x: hoop.x + 40 + 10 * i, y: hoop.y + 40 }, { t, lab: [far], x: hoop.x + 200 + 10 * i, y: hoop.y + 90 }]);
+  const left = [0, 4, 8].flatMap((t) => pic(t, 0, 1, hoopL)), right = [12, 16].flatMap((t) => pic(t, 1, 0, hoopR));
+  const a = P.defenceScore(found, left, hoopL, '왼쪽', null), b = P.defenceScore(found, right, hoopR, '오른쪽', null);
+  assert.deepStrictEqual([a.score, a.pictures, b.score, b.pictures], [-3, 3, -2, 2]);
+  const dir = P.attackDirection(found, [], null, [a, b]);
+  assert.strictEqual(dir.left, 1);                                   // team 1 (white) attacks the left hoop
+  assert.strictEqual(P.attackDirection(found, [], null, [b]), null, 'two pictures are not enough');
+  // a picture with fewer than two of each team says nothing
+  assert.strictEqual(P.defenceScore(found, pic(0, 0, 1, hoopL).slice(0, 3), hoopL, '왼쪽', null).pictures, 0);
+});
+
+test('a video with both halves: the switch time is where the evidence turns round, none when it does not', () => {
+  const items = Array.from({ length: 60 }, (_, i) => ({ t: i * 10, score: i < 30 ? 1 : -1 }));
+  const sw = P.findSwitch(items);
+  assert.ok(sw && Math.abs(sw.t - 300) <= 10, JSON.stringify(sw));
+  // the same direction all along, with some wrong votes: no switch
+  const noisy = Array.from({ length: 60 }, (_, i) => ({ t: i * 10, score: i % 4 === 0 ? -1 : 1 }));
+  assert.strictEqual(P.findSwitch(noisy), null);
+});
+
 test('a shooter number read automatically goes on the field goal, marked as automatic', () => {
   const shot = { start: 10, end: 11, side: '왼쪽', frames: 20, made: true, made_t: 10.4, confidence: '보통', player: '33', playerAuto: true };
   const r = Flow.infer({ shots: [shot], track: [[0, 1, 300, 40], [20, 1, 300, 40]] }, { team_left: '흰색', team_right: '남색' });

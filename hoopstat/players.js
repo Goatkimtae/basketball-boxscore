@@ -582,7 +582,9 @@ async function peopleIn(rgba, detector, reader) {
     if (b.score <= PL.KEEP_SCORE || b.box[3] - b.box[1] < PL.OCR_MIN_H * H) continue;
     const { lab } = shirtOf(rgba, b.box);
     if (!lab) continue;
-    out.push({ lab, look: lookOf(rgba, b.box), h: Math.round(b.box[3] - b.box[1]), reads: await reader.shirtNumbers(rgba, b.box) });
+    // x, y: where the feet are, in the 768-px-wide picture the hoop positions use
+    const sc = 768 / rgba.cols;
+    out.push({ lab, look: lookOf(rgba, b.box), h: Math.round(b.box[3] - b.box[1]), x: Math.round(((b.box[0] + b.box[2]) / 2) * sc), y: Math.round(b.box[3] * sc), reads: await reader.shirtNumbers(rgba, b.box) });
   }
   return out;
 }
@@ -655,7 +657,9 @@ function findTeams(people) {
 /** which team attacks the left hoop: shots [{side, t, lab, number}] (t on the record's clock; side as shot);
     the shooter's team is the team whose numbers include the number read, else the team of the shirt colour.
     switchTime: the teams change ends at this time (or null). Returns {left: 0|1, votes} or null when unclear. */
-function attackDirection(found, shots, switchTime) {
+/** Shooters: per team, shots at the hoop that would be "left" before the switch, and at the other one.
+    score > 0: team 0 attacks the left hoop. */
+function shooterScore(found, shots, switchTime) {
   const votes = [[0, 0], [0, 0]];       // votes[team][0]: shots at the hoop that would be "left" before the switch
   for (const s of shots) {
     let team = s.number ? found.teams.findIndex((t) => t.numbers.includes(s.number)) : -1;
@@ -665,9 +669,77 @@ function attackDirection(found, shots, switchTime) {
     const left = (s.side === '왼쪽') !== swapped;
     votes[team][left ? 0 : 1]++;
   }
-  const score = votes[0][0] - votes[0][1] - (votes[1][0] - votes[1][1]);
-  if (Math.abs(score) < 2) return null;
-  return { left: score > 0 ? 0 : 1, votes };
+  return { score: votes[0][0] - votes[0][1] - (votes[1][0] - votes[1][1]), votes };
+}
+/** Two fixed cameras: in a picture of one half with both teams in it (at least DIR.MIN_EACH each), the team standing
+    nearer the hoop (median distance of their feet to it) is defending that hoop. One vote per picture.
+    people: [{t (game clock), lab, x, y}] of the camera on `side`'s hoop, hoop: {x, y} in the same 768-px picture.
+    score > 0: team 0 attacks the left hoop. Checked on one game (research/direction/): 87 of 113 pictures right;
+    every 60 s piece of it decided right or not at all. */
+const DIR = { MIN_EACH: 2 };
+function defenceScore(found, people, hoop, side, switchTime) {
+  const byT = new Map();
+  for (const p of people || []) {
+    if (p.x == null || !p.lab) continue;
+    const g = found.labOf(p.lab);
+    if (g < 0 || g > 1) continue;
+    if (!byT.has(p.t)) byT.set(p.t, [[], []]);
+    byT.get(p.t)[g].push(Math.hypot(p.x - hoop.x, p.y - hoop.y));
+  }
+  const med = (a) => { const q = [...a].sort((x, y) => x - y); return q[Math.floor(q.length / 2)]; };
+  let score = 0, pictures = 0;
+  const near = [0, 0];
+  for (const [t, [a, b]] of byT) {
+    if (a.length < DIR.MIN_EACH || b.length < DIR.MIN_EACH) continue;
+    const k = med(a) < med(b) ? 0 : 1;                         // this team defends this hoop
+    const swapped = switchTime != null && t >= switchTime;
+    const leftHoop = (side === '왼쪽') !== swapped;
+    // team k defends the hoop that is "left" before the switch -> it attacks the right one
+    score += (k === 0) === leftHoop ? -1 : 1;
+    near[k]++; pictures++;
+  }
+  return { score, near, pictures };
+}
+/** Which found team attacks the left hoop (before switchTime): shooters' votes plus any further scores (e.g.
+    defenceScore per camera). null when the evidence is too weak. */
+function attackDirection(found, shots, switchTime, more = []) {
+  const sh = shooterScore(found, shots, switchTime);
+  const score = sh.score + more.reduce((a, m) => a + m.score, 0);
+  // with the defence pictures as well a little more is asked (short pieces of the test game: 2 of 15 wrong at 2)
+  if (Math.abs(score) < (more.length ? 3 : 2)) return null;
+  return { left: score > 0 ? 0 : 1, votes: sh.votes, score, shooters: sh.score, more: more.map((m) => m.score) };
+}
+/** A video holding both halves: the time the teams changed ends, when the evidence before and after it points
+    opposite ways, clearly (each side at least SWITCH.MIN), else null. events: [{t, score}] (score as above, one
+    item per shot or picture). Tried every SWITCH.STEP seconds. */
+const SWITCH = { MIN: 6, STEP: 10, EDGE: 60 };
+function findSwitch(events) {
+  if (!events.length) return null;
+  const ts = events.map((e) => e.t), t0 = Math.min(...ts), t1 = Math.max(...ts);
+  let best = null;
+  for (let T = t0 + SWITCH.EDGE; T <= t1 - SWITCH.EDGE; T += SWITCH.STEP) {
+    let a = 0, b = 0;
+    for (const e of events) if (e.t < T) a += e.score; else b += e.score;
+    if (Math.sign(a) === Math.sign(b) || Math.abs(a) < SWITCH.MIN || Math.abs(b) < SWITCH.MIN) continue;
+    const v = Math.abs(a) + Math.abs(b);
+    if (!best || v > best.v) best = { t: T, v, before: a, after: b };
+  }
+  return best;
+}
+/** the same evidence as attackDirection, item by item with times (for findSwitch) */
+function directionItems(found, shots, cams) {
+  const out = [];
+  for (const s of shots) {
+    const r = shooterScore(found, [s], null);
+    if (r.score) out.push({ t: s.t, score: r.score });
+  }
+  for (const c of cams || []) {
+    for (const p of [...new Set((c.people || []).map((q) => q.t))]) {
+      const r = defenceScore(found, c.people.filter((q) => q.t === p), c.hoop, c.side, null);
+      if (r.score) out.push({ t: p, score: r.score });
+    }
+  }
+  return out.sort((a, b) => a.t - b.t);
 }
 
 /* ------------------------------------------------------------------ best guess when no number was read surely */
@@ -700,8 +772,8 @@ function guessNumber(look, reads, roster, prof) {
   return { number: roster[i], p: Math.round((e[i] / z) * 100) / 100 };
 }
 
-if (typeof module !== 'undefined') module.exports = { PL, TEAM, GUESS, REB, DEF, ReboundWindow, lookOf, medianLook, lookProfiles, guessNumber, iou, hungarian, torsoRect, shirtOf, bhattacharyya, PersonDetector, Tracker, NumberReader, decideNumber, ShotWindow, peopleIn, kmeans, labToHex, findTeams, attackDirection };
-if (typeof self !== 'undefined' && typeof importScripts !== 'function') Object.assign(self, { Players: { PL, findTeams, attackDirection, decideNumber, labToHex, lookProfiles, guessNumber } });
+if (typeof module !== 'undefined') module.exports = { PL, TEAM, GUESS, REB, DEF, DIR, SWITCH, ReboundWindow, lookOf, medianLook, lookProfiles, guessNumber, iou, hungarian, torsoRect, shirtOf, bhattacharyya, PersonDetector, Tracker, NumberReader, decideNumber, ShotWindow, peopleIn, kmeans, labToHex, findTeams, attackDirection, shooterScore, defenceScore, findSwitch, directionItems };
+if (typeof self !== 'undefined' && typeof importScripts !== 'function') Object.assign(self, { Players: { PL, DIR, SWITCH, findTeams, attackDirection, shooterScore, defenceScore, findSwitch, directionItems, decideNumber, labToHex, lookProfiles, guessNumber } });
 
 /* ------------------------------------------------------------------ worker */
 if (typeof importScripts === 'function') {

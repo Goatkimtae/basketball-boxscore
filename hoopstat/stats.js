@@ -125,10 +125,34 @@ function shotsToEvents(shots, s) {
   }));
 }
 
+/* ------------------------------------------------------------------ quarters
+   Each analysis (one video, or one pair with two cameras) is one quarter; every record keeps its quarter in q
+   (records without one, from before quarters, are the 1st). Times are seconds in that quarter's video. */
+const qOf = (e) => Number(e && e.q) || 1;
+const quarterName = (q) => (q <= 4 ? `${q}쿼터` : `연장 ${q - 4}`);
+/** the quarters that have records, in order */
+function quartersIn(events) { return [...new Set(events.map(qOf))].sort((a, b) => a - b); }
+/** points per quarter: {qs, rows: [{team, pts: [per quarter], total}]} */
+function linescore(events, teams) {
+  const qs = quartersIn(events);
+  const rows = teams.map((team) => {
+    const pts = qs.map((q) => events.filter((e) => qOf(e) === q && e.team === team).reduce((a, e) => a + points(e), 0));
+    return { team, pts, total: pts.reduce((a, b) => a + b, 0) };
+  });
+  return { qs, rows };
+}
+/** records in time order: quarter by quarter */
+const byTime = (a, b) => qOf(a) - qOf(b) || a.time - b.time;
+
 /** Replace the automatic records with a new analysis. Manual records are kept. What the user did to
     an automatic record survives when the new analysis finds the same thing (same team, within 1 s):
-    a jersey number is carried over, and a shot the user confirmed keeps its result and kind. */
-function mergeReanalysis(old, auto) {
+    a jersey number is carried over, and a shot the user confirmed keeps its result and kind.
+    With q, only that quarter is replaced (the new records get q); the other quarters stay as they are. */
+function mergeReanalysis(old, auto, q) {
+  if (q != null) {
+    const other = old.filter((e) => qOf(e) !== q);
+    return [...other, ...mergeReanalysis(old.filter((e) => qOf(e) === q), auto.map((e) => ({ ...e, q })))].sort(byTime);
+  }
   const shot = (e) => e.type === '야투' || e.type === '자유투';
   const pool = old.filter((e) => e.source === '자동' && ((e.player || '').trim() || e.checked));
   const fresh = auto.map((e) => {
@@ -141,9 +165,9 @@ function mergeReanalysis(old, auto) {
     if (o.checked && shot(e)) Object.assign(out, { type: o.type, detail: o.detail, result: o.result, checked: true, confidence: o.confidence });
     return out;
   });
-  return [...old.filter((e) => e.source !== '자동'), ...fresh].sort((a, b) => a.time - b.time);
+  return [...old.filter((e) => e.source !== '자동'), ...fresh].sort(byTime);
 }
 
-const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis };
+const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime };
 if (typeof window !== 'undefined') window.Stats = Stats;
 if (typeof module !== 'undefined') module.exports = Stats;
