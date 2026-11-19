@@ -1,7 +1,9 @@
 /* The whole app in headless Chromium on a two-camera game: makes the gym profile by clicking the rims,
    runs the analysis (both stages), reads the results back from the page.
 
-     node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "1 2 3|4 5 6"] [--rim-offset dx,dy]
+     node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "1 2 3|4 5 6"] [--rim-offset dx,dy] [--quarters]
+   --quarters: after the first analysis the same clips are chosen again under other names and analysed as the next quarter.
+   --swap (with --quarters): before that, the page's two teams are put on the wrong ends (the app should put them back).
 
    Headless Chromium has no H.264/HEVC decoder: the clips must be VP9 in MP4 (make them with
    make-clips.sh at full resolution; 768-px clips are too small to read numbers). The page is served by
@@ -82,6 +84,35 @@ async function run(game, opt = {}) {
     log.fields = {};
     for (const id of ['team_left', 'color_left', 'roster_left', 'team_right', 'color_right', 'roster_right', 'cam_offset']) log.fields[id] = await page.inputValue(`#${id}`);
     log.records = await page.$$eval('#eventTable tbody tr', (trs) => trs.map((tr) => [...tr.children].slice(0, 6).map((td) => td.textContent)));
+    // --quarters: the same clips again under other file names, as the next quarter (the app should pick it by itself)
+    if (opt.quarters) {
+      const os = require('os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hoopstat-q2-'));
+      const copy = (f, n) => { const to = path.join(dir, n); fs.copyFileSync(f, to); return to; };
+      await page.setInputFiles('#videoInput', copy(clipA, 'second-left.mp4'));
+      await page.setInputFiles('#videoInputB', copy(clipB, 'second-right.mp4'));
+      await page.waitForTimeout(3000);
+      log.quarter2 = await page.inputValue('#quarter');
+      if (opt.swap) {
+        // put the page's two teams on the wrong ends: the analysis should move them back to what the video shows
+        await page.evaluate(() => { for (const k of ['team', 'color', 'roster']) { const l = document.getElementById(`${k}_left`), r = document.getElementById(`${k}_right`); [l.value, r.value] = [r.value, l.value]; } });
+        log.swappedTo = await page.inputValue('#team_left');
+      }
+      log.quarterNote = await page.textContent('#quarterNote');
+      const t1 = Date.now();
+      await page.click('#runBtn');
+      await page.waitForFunction(() => /쿼터 분석 끝|분석하지 못했|오류/.test(document.getElementById('status').textContent) && !document.getElementById('runBtn').disabled, null, { timeout: 7000000, polling: 2000 });
+      await page.waitForFunction(() => document.getElementById('status').textContent.startsWith(document.getElementById('quarter').selectedOptions[0].textContent), null, { timeout: 7000000, polling: 2000 });
+      log.seconds2 = Math.round((Date.now() - t1) / 1000);
+      log.status2 = await page.textContent('#status');
+      log.records = await page.$$eval('#eventTable tbody tr', (trs) => trs.map((tr) => [...tr.children].slice(0, 6).map((td) => td.textContent)));
+      await page.click('#tabBox');
+      log.linescore = await page.$$eval('#lineTable tr', (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent.trim())));
+      log.boxOptions = await page.$$eval('#boxQuarter option', (os) => os.map((o) => o.textContent));
+      await page.selectOption('#boxQuarter', '2');
+      log.box2 = await page.$$eval('#teamTable tr', (trs) => trs.slice(0, 3).map((tr) => [...tr.children].map((td) => td.textContent.trim())));
+      await page.click('#tabEvents');
+      for (const id of ['team_left', 'color_left', 'team_right', 'color_right']) log.fields[`${id}_q2`] = await page.inputValue(`#${id}`);
+    }
     await page.click('#numBtn'); await page.waitForTimeout(3000);
     log.reviewLeft = log.nothingToReview ? '0' : await page.textContent('#numLeft');
     await page.screenshot({ path: H.out('e2e', `${game}-last.png`) });
@@ -94,7 +125,7 @@ async function run(game, opt = {}) {
 if (require.main === module) {
   const a = H.args();
   if (!a._[0]) { console.error('usage: node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "l|r"]'); process.exit(2); }
-  run(a._[0], { clips: a.clips, players: !a['no-players'], names: a.names, rosters: a.rosters, rimOffset: a['rim-offset'], log: (m) => console.log(m) }).then((log) => {
+  run(a._[0], { clips: a.clips, players: !a['no-players'], names: a.names, rosters: a.rosters, rimOffset: a['rim-offset'], quarters: a.quarters, swap: a.swap, log: (m) => console.log(m) }).then((log) => {
     const file = H.save(H.out('e2e', `${a._[0]}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), log);
     const shots = log.records.filter((r) => r[3] === '야투' || r[3] === '자유투');
     console.log(`STATUS (${log.seconds}s): ${log.status}`);
@@ -103,6 +134,13 @@ if (require.main === module) {
     const n = (list, re) => list.filter((r) => re.test(r[2])).length;
     console.log(`shots ${shots.length}: number read ${n(shots, /\(자동\)/)}, guessed ${n(shots, /\(추정\)/)}; rebounds ${rebs.length}: number read ${n(rebs, /\(자동\)/)}, guessed ${n(rebs, /\(추정\)/)}; review left ${log.reviewLeft}`);
     if (log.snap) console.log('rim snap:', log.snap.join(' / '));
+    if (log.players) console.log('direction:', JSON.stringify({ how: log.players.how, score: log.players.dirScore, shooters: log.players.direction, defence: log.players.defence }));
+    if (log.status2) {
+      console.log(`2nd analysis (quarter picked: ${log.quarter2}, note: ${log.quarterNote}${log.swappedTo ? `, page swapped so the left team was ${log.swappedTo}` : ''}) ${log.seconds2}s: ${log.status2}`);
+      console.log('teams after it:', JSON.stringify(Object.fromEntries(Object.entries(log.fields).filter(([k]) => k.endsWith('_q2')))));
+      console.log('linescore:', JSON.stringify(log.linescore), 'box options:', JSON.stringify(log.boxOptions));
+      console.log('box (2nd quarter only):', JSON.stringify(log.box2));
+    }
     console.log('errors:', log.errors.length ? log.errors.join('\n') : 'none');
     console.log('->', path.relative(H.ROOT, file));
     process.exit(log.errors.length ? 1 : 0);

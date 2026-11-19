@@ -96,7 +96,7 @@
       <label for="switch_time">공격 방향 바뀌는 시각</label>
       <div class="row">
         <input id="switch_time" inputmode="decimal" size="8" placeholder="예: 1200">
-        <span class="muted">초 (후반 시작 등. 없으면 비움)</span>
+        <span class="muted">초. 한 영상에 전반·후반이 다 있을 때만(비워 두면 분석이 찾아 넣음). 쿼터마다 영상이 따로면 비움 — 쿼터별로 방향을 정합니다</span>
       </div>
 
       <label for="title">제목</label>
@@ -118,7 +118,7 @@
       <span id="status" class="status">영상을 고르고, 체육관 설정을 고른 뒤 '분석 시작'을 누르세요.</span>
     </div>
     <label class="check"><input type="checkbox" id="auto_players" checked> 선수 번호·팀 자동 찾기
-      <span class="muted">팀 색, 팀별 등번호(비어 있을 때), 공격 방향, 슈터·리바운드 선수 번호. 처음 한 번 모델 약 30MB를 내려받고 분석 시간이 몇 분 늘어납니다.</span></label>
+      <span class="muted">팀 색, 공격 방향(적어 둔 팀 이름도 영상에 맞춰 왼쪽·오른쪽을 바꿈), 팀별 등번호(비어 있을 때), 슈터·리바운드 선수 번호. 처음 한 번 모델 약 30MB를 내려받고 분석 시간이 몇 분 늘어납니다.</span></label>
     <label class="check"><input type="checkbox" id="auto_guess" checked> 번호가 안 보이면 가장 비슷한 선수로 추정해서 넣기
       <span class="muted">표에 '(추정)'으로 표시. 시험한 경기에서 추정은 4~5번 중 1번 정도만 맞았습니다(아무나 고른 것과 비슷, 사용법 참고).</span></label>
   </section>
