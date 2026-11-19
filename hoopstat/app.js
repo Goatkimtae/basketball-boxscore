@@ -36,7 +36,7 @@ function profileTemplates(name) {
 }
 
 /* ------------------------------------------------------------------ settings */
-const APP_VERSION = 'hoopstat-v12';   // the same as VERSION in sw.js (a test checks)
+const APP_VERSION = 'hoopstat-v13';   // the same as VERSION in sw.js (a test checks)
 /* ------------------------------------------------------------------ settings (continued) */
 const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title', 'quarter'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
