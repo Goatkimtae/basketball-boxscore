@@ -40,7 +40,8 @@ async function run(game, opt = {}) {
   const log = { game, clips: [clipA, clipB], errors: [], stages: [], players: null };
   page.on('pageerror', (e) => log.errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') log.errors.push(m.text()); if (m.text().startsWith('[players] ')) log.players = JSON.parse(m.text().slice(10)); if (m.text().startsWith('[practice] ')) log.practice = JSON.parse(m.text().slice(11)); });
-  page.on('dialog', (d) => { log.errors.push(`[dialog] ${d.message()}`); d.accept(); });
+  // the quick review says there is nothing left to check: that is the hoped-for result, not an error
+  page.on('dialog', (d) => { if (/검토할 기록이 없습니다/.test(d.message())) log.nothingToReview = true; else log.errors.push(`[dialog] ${d.message()}`); d.accept(); });
   try {
     await page.goto(`http://127.0.0.1:${port}/hoopstat/`);
     await page.selectOption('#cam_mode', 'two');
@@ -82,7 +83,7 @@ async function run(game, opt = {}) {
     for (const id of ['team_left', 'color_left', 'roster_left', 'team_right', 'color_right', 'roster_right', 'cam_offset']) log.fields[id] = await page.inputValue(`#${id}`);
     log.records = await page.$$eval('#eventTable tbody tr', (trs) => trs.map((tr) => [...tr.children].slice(0, 6).map((td) => td.textContent)));
     await page.click('#numBtn'); await page.waitForTimeout(3000);
-    log.reviewLeft = await page.textContent('#numLeft');
+    log.reviewLeft = log.nothingToReview ? '0' : await page.textContent('#numLeft');
     await page.screenshot({ path: H.out('e2e', `${game}-last.png`) });
   } finally {
     await b.close(); srv.close();
