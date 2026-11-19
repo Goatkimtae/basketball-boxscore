@@ -17,11 +17,15 @@ function byQuarter(events, teams) {
 }
 const Q_COLS = [['득점', (t) => t.PTS], ['야투', (t) => `${t.FGM}/${t.FGA}`], ['3점', (t) => `${t['3PM']}/${t['3PA']}`], ['자유투', (t) => `${t.FTM}/${t.FTA}`],
   ['리바운드', (t) => t.REB], ['어시스트', (t) => t.AST], ['턴오버', (t) => t.TO], ['파울', (t) => t.PF]];
-/** which team attacked the left hoop in each analysed quarter, as text (null when nothing is saved) */
-function sidesText(s) {
-  const qs = Object.entries(s.quarters || {}).filter(([, x]) => x && x.sides).sort((a, b) => a[0] - b[0]);
+/** which team attacked the left hoop in each quarter of the record, as text (teams A / B: s.team_left / s.team_right) */
+function sidesText(s, events) {
+  const qs = [...new Set([...Stats.quartersIn(events || []), ...Object.keys(s.quarters || {}).map(Number)])].sort((a, b) => a - b);
   if (!qs.length) return null;
-  return qs.map(([q, x]) => `${Stats.quarterName(Number(q))}: 왼쪽 골대 ${x.sides[0]}, 오른쪽 골대 ${x.sides[1]}`).join(' · ');
+  const nm = (id) => (id === 'B' ? s.team_right : s.team_left) || `팀 ${id}`, other = (id) => (id === 'A' ? 'B' : 'A');
+  return qs.map((q) => {
+    const d = Stats.dirOf(s.quarters || {}, q);
+    return `${Stats.quarterName(q)}: 왼쪽 골대 ${nm(d.left)}, 오른쪽 골대 ${nm(other(d.left))}${d.switchT != null ? `(${d.switchT}초부터 반대)` : ''}${d.source === '사람' ? ' — 사람이 정함' : d.source === '기본' ? ' — 정하지 못함' : ''}`;
+  }).join(' · ');
 }
 
 function download(name, blob) {
@@ -105,7 +109,7 @@ function xlsxBlob(events, s) {
     ['파울(자동)', '2~4.8kHz의 고른 휘슬 소리 뒤 1~12초 동안 선수들이 거의 멈추면 파울로 봅니다(멈추지 않으면 무시). 그때 공을 가진 팀의 상대 팀 파울로 기록합니다. 슛 직후 휘슬이면 그 슛의 수비 팀 파울.'],
     ['자유투(자동)', '파울 휘슬 뒤 40초 안에 같은 골대에서 선수들이 선 채로 던진 첫 슛 1개를 자유투로 봅니다(자동은 2점슛 파울로 기록, 들어간 슛에 휘슬이면 앤드원).'],
     ['사람이 넣는 기록', '등번호(등번호 넣기), 어시스트, 스틸, 블록, 3점슛, 슛이 아닌 파울'],
-    ['팀', `골대 방향으로 정합니다. ${sidesText(s) || `왼쪽 골대 공격 = ${teams[0]}, 오른쪽 골대 공격 = ${teams[1]}${s.switch_time ? ` (영상 ${s.switch_time}초부터 서로 바뀜)` : ''}`}`],
+    ['팀', `슛의 팀은 그 골대를 공격한 팀으로 정합니다. ${sidesText(s, events) || ''}`],
     ['쿼터', '쿼터마다 영상(카메라 2대면 영상 2개)을 따로 분석합니다. 사건 기록의 시각은 그 쿼터 영상의 시작부터 센 초입니다.'],
     ['2점·3점', '자동 기록은 모두 2점입니다. 3점 라인은 영상으로 판정하지 않습니다.'],
     ['자유투(팀 규칙)', '슈팅 파울은 자유투 1개만 던지고, 성공하면 던지던 슛의 점수(2점슛 파울 2점, 3점슛 파울 3점)를 인정. 앤드원은 1개·1점(KBL).'],
@@ -171,7 +175,7 @@ tr.total td{font-weight:700;border-top:2px solid var(--line)}.scroll.cmp{max-wid
 <header><p class="eyebrow">영상 자동 분석 + 사람 검토${dur}</p><h1>${esc(titleOf(s))}</h1></header>
 <section class="score" aria-label="점수판">
 <div class="team"><span class="tname">${chip(a)}${esc(a)}</span><span class="big">${sa.PTS}</span><span class="sub">야투 ${sa.FGM}/${sa.FGA} · 리바운드 ${sa.REB} · 어시스트 ${sa.AST}</span></div>
-<div class="vs">${mq && sidesText(s) ? esc(sidesText(s)).replace(/ · /g, '<br>') : `왼쪽 골대: ${esc(a)} 공격<br>오른쪽 골대: ${esc(b)} 공격${s.switch_time ? `<br>${esc(s.switch_time)}초부터 방향 교대` : ''}`}</div>
+<div class="vs">${esc(sidesText(s, events) || '').replace(/ · /g, '<br>')}</div>
 <div class="team r"><span class="tname">${esc(b)}${chip(b)}</span><span class="big">${sb.PTS}</span><span class="sub">야투 ${sb.FGM}/${sb.FGA} · 리바운드 ${sb.REB} · 어시스트 ${sb.AST}</span></div>
 </section>
 ${quarters}

@@ -12,6 +12,7 @@ const LS_WORK = 'hoopstat.work.v1';
 
 const newVid = () => ({ file: null, url: null, duration: 0, ok: false, name: '' });
 const S = { vids: { A: newVid(), B: newVid() }, events: [], selId: null, workers: [], ctx: null, quarters: {}, removed: [], history: [], runId: 0,
+  teamInfo: { A: {}, B: {} },
   reviewing: false, skipped: new Set(), sceneCam: null, sceneToken: 0, grabChain: Promise.resolve() };
 
 /* ------------------------------------------------------------------ storage */
@@ -55,13 +56,37 @@ function settings() {
   s.quarters = S.quarters;            // per quarter: its videos, play-flow ctx, which team attacked which hoop
   s.colours_known = !!S.coloursKnown;  // the team colours were chosen or found, not just the defaults
   s.removed = S.removed;              // deleted automatic / rebuilt records (not made again)
+  s.teamInfo = S.teamInfo;            // per team: where the colour came from (auto / user), the colour seen, evidence
   s.history = S.history;              // edits and deletions, newest last
   return s;
 }
 /** the quarter of the videos chosen now (step 2): analyses, the quick review and new records go there */
 const curQ = () => Number($('quarter').value) || 1;
 // qOf(e): the record's quarter (stats.js, shared by the page's scripts)
+/** the two teams, A then B (the page's first and second team rows; ids kept from when they were left / right) */
 function teams() { const s = settings(); return [s.team_left || '팀 A', s.team_right || '팀 B']; }
+const idOf = (name) => { const [a, b] = teams(); return name === a ? 'A' : name === b ? 'B' : null; };
+const nameOf = (id) => teams()[id === 'B' ? 1 : 0];
+const otherId = (id) => (id === 'A' ? 'B' : 'A');
+/** A quarter's attack direction {left: 'A'|'B', switchT, source, how}: as saved for it (found by the analysis or set by
+    the user), else from the nearest quarter with one (same half: same ends; the other half: the other ends, FIBA 9.5;
+    overtime like the 4th), else team A on the left (not known). */
+const dirFor = (q) => Stats.dirOf(S.quarters, q);
+/** settings as one quarter sees them: team_left / team_right are the teams attacking the left / right hoop then,
+    switch_time the time they change ends inside that quarter's video (or null) */
+function settingsFor(q) {
+  const s = settings(), d = dirFor(q), [a, b] = teams();
+  const [L, R] = d.left === 'B' ? [b, a] : [a, b], [cL, cR] = d.left === 'B' ? [s.color_right, s.color_left] : [s.color_left, s.color_right];
+  return { ...s, team_left: L, team_right: R, color_left: cL, color_right: cR, switch_time: d.switchT ?? null };
+}
+/** records keep their team as A or B (tid): renaming a team renames its records, they never split off */
+function syncTeamIds() {
+  const [a, b] = teams();
+  for (const e of S.events) {
+    if (e.tid === 'A' || e.tid === 'B') { const n = e.tid === 'A' ? a : b; if (e.team && e.team !== n) e.team = n; }
+    else if (e.team) { const id = idOf(e.team); if (id) e.tid = id; }
+  }
+}
 let knownTeams = null;
 const flowCtx = () => S.ctx || { mode: twoCam() ? 'two' : 'pan', segs: [] };
 /** the play-flow ctx of a quarter (filming mode, camera looks): the one saved with its analysis */
@@ -86,8 +111,10 @@ function save() {
 /** After any change to the record: rebuild rebounds/turnovers from the shots as they are now. */
 function changed() {
   for (const e of S.events) if (!e.id) e.id = uid();
-  S.events = Flow.deriveQuarters(S.events, settings(), ctxFor);
+  syncTeamIds();
+  S.events = Flow.deriveQuarters(S.events, settingsFor, ctxFor);
   for (const e of S.events) if (!e.id) e.id = uid();
+  syncTeamIds();
   render(); save();
 }
 
@@ -101,7 +128,7 @@ function camOf(e) {
   if (e.side) return e.side === '왼쪽' ? 'A' : 'B';
   const near = S.events.filter((x) => x.cam && qOf(x) === qOf(e) && Math.abs(x.time - e.time) <= 6).sort((a, b) => Math.abs(a.time - e.time) - Math.abs(b.time - e.time))[0];
   if (near) return near.cam;
-  return Stats.teamFor('왼쪽', e.time, settings()) === e.team ? 'A' : 'B';
+  return Stats.teamFor('왼쪽', e.time, settingsFor(qOf(e))) === e.team ? 'A' : 'B';
 }
 function frameSize(cam) {
   const v = vidEl(cam);
@@ -435,7 +462,11 @@ async function findPlayers(jobs, res, off, run, onProgress) {
   const results = out.flatMap((r) => r.shots);
   const byId = new Map(results.filter((x) => x.kind !== 'rebound').map((x) => [x.id, x]));
   const rebById = new Map(results.filter((x) => x.kind === 'rebound').map((x) => [x.id, x]));
-  const found = Players.findTeams(out.flatMap((r) => r.people));
+  // team colours from the pictures where the play is in that half (6 or more people: fewer waiting players, people at
+  // the side or practising at the empty hoop); all pictures when that finds no two teams
+  const allPeople = out.flatMap((r, i) => r.people.map((p) => ({ ...p, k: `${taskVi[i]}:${p.t}` })));
+  const perPic = new Map(); for (const p of allPeople) perPic.set(p.k, (perPic.get(p.k) || 0) + 1);
+  const found = Players.findTeams(allPeople.filter((p) => perPic.get(p.k) >= 6)) || Players.findTeams(allPeople);
   const clock = (cam, t) => t + (cam === 'B' ? off : 0);
   const shotList = [];
   jobs.forEach((j, vi) => res[vi].shots.forEach((sh, k) => {
@@ -460,50 +491,49 @@ async function findPlayers(jobs, res, off, run, onProgress) {
     return { side: vi ? '오른쪽' : '왼쪽', hoop: { x: medOf('x'), y: medOf('y') },
       people: out.filter((_, i) => taskVi[i] === vi).flatMap((r) => r.people).map((p) => ({ ...p, t: clock(j.cam, p.t) })) };
   }).filter(Boolean) : [];
-  // a video holding both halves: the time the teams changed ends (filled in when the box is empty)
-  if (found && settings().switch_time == null) {
-    const sw = Players.findSwitch(Players.directionItems(found, shotList, camsDir));
-    if (sw) { $('switch_time').value = String(Math.round(sw.t)); notes.push(`공격 방향이 ${Math.round(sw.t)}초쯤 바뀜(전반·후반이 한 영상에 있음) — '공격 방향 바뀌는 시각'에 넣음`); }
-  }
-  const swNow = settings().switch_time;
-  const more = found ? camsDir.map((c) => Players.defenceScore(found, c.people, c.hoop, c.side, swNow)) : [];
-  let dir = found ? Players.attackDirection(found, shotList, swNow, more) : null, dirHow = '';
-  if (dir) {
-    const pics = more.reduce((a, m) => a + m.pictures, 0);
-    dirHow = `슈터 ${Math.abs(dir.shooters)}표${pics ? `, 수비 위치 ${Math.abs(more.reduce((a, m) => a + m.score, 0))}표(사진 ${pics}장)` : ''}`;
-  }
-  // which found team is the page's left team now: typed number lists first, then the team colours
+  const q = run.q, prev = S.quarters[q] && S.quarters[q].dir, userDir = prev && prev.source === '사람';
+  // which found team is team A (the page's first team): its number list first, then its colour
   const ident = found ? identify(found) : null;
-  if (found && !dir) {
-    // the same game's other quarters: the same ends in the same half, the other ends after half time (FIBA 9.5;
-    // overtime goes on like the 4th quarter)
-    const q = run.q, half = (x) => (x <= 2 ? 1 : 2);
-    const ref = Object.entries(S.quarters).map(([k, x]) => [Number(k), x]).filter(([k, x]) => k !== q && x && x.sides)
-      .sort((a, b) => Math.abs(a[0] - q) - Math.abs(b[0] - q))[0];
-    const [pl, pr] = teams();
-    if (ref && ident != null && ref[1].sides.includes(pl) && ref[1].sides.includes(pr)) {
-      const same = half(ref[0]) === half(q), leftName = same ? ref[1].sides[0] : ref[1].sides[1];
-      dir = { left: leftName === pl ? ident : 1 - ident };
-      dirHow = `${Stats.quarterName(ref[0])}${same ? '와 같은 방향' : '의 반대(후반에 골대를 바꿈)'}으로 추정`;
-    } else if (ident != null) {
-      dir = { left: ident }; dirHow = '고른 팀 색·명단(영상으로는 정하지 못함)';
-    }
+  // a video holding both halves: the time the teams changed ends (unless the user set it)
+  let switchT = prev && prev.switchSource === '사람' ? prev.switchT : null, switchSource = prev && prev.switchSource === '사람' ? '사람' : null;
+  if (found && switchSource !== '사람') {
+    const sw = Players.findSwitch(Players.directionItems(found, shotList, camsDir));
+    if (sw) { switchT = Math.round(sw.t); switchSource = '자동'; notes.push(`두 팀이 ${switchT}초쯤 골대를 바꿈(전반·후반이 한 영상에 있음)`); }
   }
-  console.info('[players]', JSON.stringify({ teams: found && found.teams.map((t) => ({ colour: t.colour, numbers: t.numbers, seen: t.seen })),
-    others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: dir && dir.votes, dirScore: dir && dir.score,
-    defence: more.map((m) => ({ score: m.score, near: m.near, pictures: m.pictures })), how: dirHow, ident,
-    shots: shotList.map((x) => [x.cam, Math.round(x.sh.start * 10) / 10, x.side, x.number, x.r.gap, x.r.runReads, x.r.reads.length]) }));
-  if (found && dir) {
-    const left = found.teams[dir.left], right = found.teams[1 - dir.left];
-    // the page's teams follow the video: the page's left team was found attacking the right hoop -> they change places
-    const moved = ident != null && ident !== dir.left;
-    if (moved) swapSides();
+  const more = found ? camsDir.map((c) => Players.defenceScore(found, c.people, c.hoop, c.side, switchT)) : [];
+  const autoDir = found ? Players.attackDirection(found, shotList, switchT, more) : null;
+  let dirHow = '';
+  if (autoDir) {
+    const pics = more.reduce((a, m) => a + m.pictures, 0);
+    dirHow = `슈터 ${Math.abs(autoDir.shooters)}표${pics ? `, 수비 위치 ${Math.abs(more.reduce((a, m) => a + m.score, 0))}표(사진 ${pics}장)` : ''}`;
+  }
+  // found team index -> A / B (no way to tell: the team found attacking the left hoop is A, so the colours stay with the sides)
+  const idOfFound = (k) => (ident != null ? (k === ident ? 'A' : 'B') : autoDir ? (k === autoDir.left ? 'A' : 'B') : (k === 0 ? 'A' : 'B'));
+  let dirNote = '';
+  if (userDir) {
+    const agree = !autoDir || idOfFound(autoDir.left) === prev.left;
+    S.quarters[q] = { ...S.quarters[q], dir: { ...prev, switchT, switchSource } };
+    dirNote = `공격 방향: 사람이 정한 대로 둠${agree ? '' : ` — 영상으로는 반대로 보임(${dirHow})`}`;
+  } else if (autoDir) {
+    S.quarters[q] = { ...(S.quarters[q] || {}), dir: { left: idOfFound(autoDir.left), switchT, switchSource, source: '자동', how: dirHow, score: autoDir.score } };
+    dirNote = `공격 방향: ${dirHow}`;
+  } else {
+    const d = dirFor(q);
+    S.quarters[q] = { ...(S.quarters[q] || {}), dir: { ...d, switchT, switchSource, source: d.source === '기본' ? '기본' : '규칙', how: `영상으로 정하지 못함 — ${d.how}` } };
+    dirNote = `공격 방향을 영상으로 정하지 못함(${d.how}). 틀리면 1단계 '공격 방향' 표에서 고르세요`;
+  }
+  if (found) {
+    // colours: what the video shows, unless the user chose one; names still at their defaults become colour names
+    const [ka, kb] = [0, 1].sort((x, y) => (idOfFound(x) === 'A' ? -1 : 1));
+    const de = Math.hypot(...found.teams[0].lab.map((v, i) => v - found.teams[1].lab[i]));
     const filled = [];
-    for (const [side, team] of [['left', left], ['right', right]]) {
-      $(`color_${side}`).value = colourName(team.lab);            // the colour seen in the video
-      if ($(`roster_${side}`).value.trim()) continue;             // numbers typed by the user stay
-      $(`roster_${side}`).value = team.numbers.join(' ');
-      filled.push(side);
+    for (const [side, k] of [['left', ka], ['right', kb]]) {
+      const t = found.teams[k], id = side === 'left' ? 'A' : 'B', info = S.teamInfo[id] = S.teamInfo[id] || {};
+      const conf = t.count >= 40 && t.numbers.length >= 2 && de >= 25 ? '높음' : t.count >= 15 && de >= 15 ? '보통' : '낮음';
+      Object.assign(info, { hex: t.colour, colourSeen: colourName(t.lab), people: t.count, numbers: t.numbers.join(' '), apart: Math.round(de), confidence: conf,
+        evidence: `사람 사진 ${t.count}명, 번호 ${t.numbers.join('·') || '없음'}, 두 팀 색 차이 ${Math.round(de)}` });
+      if (info.colourSource !== '사람') { $(`color_${side}`).value = colourName(t.lab); info.colourSource = '자동'; }
+      if (!$(`roster_${side}`).value.trim()) { $(`roster_${side}`).value = t.numbers.join(' '); filled.push(side); }
     }
     S.coloursKnown = true;
     if ($('team_left').value.trim() === DEFAULT_TEAMS[0] && $('team_right').value.trim() === DEFAULT_TEAMS[1]) {
@@ -512,12 +542,18 @@ async function findPlayers(jobs, res, off, run, onProgress) {
       $('team_left').value = nl; $('team_right').value = nr;
     }
     knownTeams = teams();
-    const [ta, tb] = teams();
-    notes.push(`팀 자동 찾기(공격 방향: ${dirHow}): 왼쪽 골대 공격 ${ta}(${left.numbers.join('·') || '번호 없음'}), 오른쪽 ${tb}(${right.numbers.join('·') || '번호 없음'})`
-      + (moved ? ' — 영상에 맞춰 두 팀의 왼쪽·오른쪽을 바꿈' : '') + (filled.length < 2 ? ' — 이미 적힌 등번호 명단은 그대로 둠' : ''));
+    const d = dirFor(q), [ta, tb] = teams();
+    notes.push(`팀 자동 찾기: 팀 A ${ta}(${found.teams[ka].numbers.join('·') || '번호 없음'}), 팀 B ${tb}(${found.teams[kb].numbers.join('·') || '번호 없음'})`
+      + `${de < 15 ? ' — 두 팀 색이 비슷해 구분이 약함, 1단계에서 확인하세요' : ''}. ${Stats.quarterName(q)} 왼쪽 골대 공격 ${nameOf(d.left)}. ${dirNote}`
+      + (filled.length < 2 ? ' — 이미 적힌 등번호 명단은 그대로 둠' : ''));
   } else {
-    notes.push(found ? `공격 방향을 정하지 못함(슛·사람이 적게 보임). 찾은 두 팀 색: ${found.teams.map((t) => colourName(t.lab)).join('·')} — 팀 색을 이 색으로 골라 두면 다음 분석에서 방향을 정함` : '팀을 셔츠 색으로 가리지 못함(사람이 적게 보임)');
+    notes.push(`팀을 셔츠 색으로 가리지 못함(사람이 적게 보임). ${dirNote}`);
   }
+  console.info('[players]', JSON.stringify({ teams: found && found.teams.map((t) => ({ colour: t.colour, numbers: t.numbers, seen: t.seen, count: t.count })),
+    others: found && found.others.map((t) => ({ colour: t.colour, numbers: t.numbers })), direction: autoDir && autoDir.votes, dirScore: autoDir && autoDir.score,
+    defence: more.map((m) => ({ score: m.score, near: m.near, pictures: m.pictures })), how: dirHow, ident, dir: dirFor(q),
+    shots: shotList.map((x) => [x.cam, Math.round(x.sh.start * 10) / 10, x.side, x.number, x.r.gap, x.r.runReads, x.r.reads.length]) }));
+  const sq = settingsFor(q);
   // shooters: a number read surely and on the attacking team's list; otherwise (when allowed) the most likely number of that list
   const guessing = $('auto_guess').checked;
   const prof = Players.lookProfiles(out.flatMap((r) => r.people), [...rosterList(teams()[0]), ...rosterList(teams()[1])]);
@@ -527,7 +563,7 @@ async function findPlayers(jobs, res, off, run, onProgress) {
   const guessIn = (look, reads, list) => (guessing ? (Players.guessNumber(look, reads, list, prof) || (mostSeen(list) ? { number: mostSeen(list) } : null)) : null);
   let auto = 0, guessed = 0;
   for (const x of shotList) {
-    const team = Stats.teamFor(x.side, x.t, settings()), list = rosterList(team);
+    const team = Stats.teamFor(x.side, x.t, sq), list = rosterList(team);
     // the shooter's nearest opponent: who fouled, if this shot was fouled (used when a whistle follows)
     const opp = teams().find((t) => t !== team), olist = rosterList(opp), d = x.r.def;
     if (d) {
@@ -547,7 +583,7 @@ async function findPlayers(jobs, res, off, run, onProgress) {
     const next = shotList.find((y) => y.vi === x.vi && y.side === x.side && y.sh.start > x.sh.end && y.sh.start <= x.sh.end + 3);
     for (const team of teams()) {
       const list = rosterList(team);
-      if (next && next.sh.player && Stats.teamFor(next.side, next.t, settings()) === team) { reb[team] = { number: next.sh.player, guess: !!next.sh.playerGuess, how: '연속 슛' }; continue; }
+      if (next && next.sh.player && Stats.teamFor(next.side, next.t, sq) === team) { reb[team] = { number: next.sh.player, guess: !!next.sh.playerGuess, how: '연속 슛' }; continue; }
       if (x.reb && x.reb.number && list.includes(x.reb.number)) { reb[team] = { number: x.reb.number, guess: false, how: '번호 읽음' }; continue; }
       const g = guessIn(x.reb ? x.reb.look : null, x.reb ? x.reb.reads : [], list);
       if (g) reb[team] = { number: g.number, guess: true, how: '추정' };
@@ -655,14 +691,14 @@ async function runAnalysis() {
   }
   if (withPlayers && S.mostSeen) result.mostSeen = S.mostSeen;
   if (stale()) return;
-  const s2 = settings(), q = run.q;
+  const s2 = settingsFor(run.q), q = run.q;
   const out = Flow.infer(result, s2);
   S.ctx = out.ctx;
   S.events = Stats.mergeReanalysis(S.events, out.events, q, S.removed);
   const fid = (f) => (f ? { name: f.name, size: f.size, lastModified: f.lastModified } : null);
   S.quarters[q] = { ...(S.quarters[q] || {}), ctx: out.ctx, video: fid(run.files[0]), video_b: two ? fid(run.files[1]) : null,
     video_name: s2.video_name, video_name_b: two ? s2.video_name_b : '', cam_offset: two ? off : 0,
-    sides: teams(), switch_time: s2.switch_time, duration: S.vids.A.duration || 0, at: new Date().toISOString() };
+    duration: S.vids.A.duration || 0, at: new Date().toISOString() };
   const n = out.summary;
   const noSound = res.map(soundText).filter(Boolean)[0];
   const sound = noSound ? `${noSound}(파울·자유투는 판정하지 않음)`
@@ -696,11 +732,68 @@ function finish() {
 }
 $('cancelBtn').addEventListener('click', () => { S.runId++; stopWorkers(); finish(); status('분석을 취소했습니다. 이 분석의 결과는 기록에 넣지 않습니다.'); });
 
+/* ------------------------------------------------------------------ teams and attack direction (step 1) */
+function tdOf(el) { const td = document.createElement('td'); td.append(el); return td; }
+function renderTeams() {
+  for (const [side, id] of [['left', 'A'], ['right', 'B']]) {
+    const t = S.teamInfo[id] || {}, sw = $(`swatch_${side}`), info = $(`teamInfo_${side}`);
+    if (t.hex) { sw.style.background = t.hex; sw.title = `영상에서 찾은 색 ${t.hex}`; } else sw.removeAttribute('style');
+    info.textContent = t.hex ? `${t.colourSource === '사람' ? '색은 사람이 고름' : '색 자동'} · 영상에서 본 색 ${t.colourSeen} · ${t.evidence} · 신뢰도 ${t.confidence}` : '';
+    info.classList.toggle('warn', t.confidence === '낮음');
+  }
+  const qs = [...new Set([...Stats.quartersIn(S.events), ...Object.keys(S.quarters).map(Number), curQ()])].sort((x, y) => x - y);
+  const [a, b] = teams();
+  $('dirTable').tBodies[0].replaceChildren(...qs.map((q) => {
+    const d = dirFor(q), tr = document.createElement('tr');
+    const sel = document.createElement('select');
+    sel.append(new Option(a, 'A'), new Option(b, 'B')); sel.value = d.left;
+    sel.setAttribute('aria-label', `${Stats.quarterName(q)} 왼쪽 골대 공격 팀`);
+    sel.addEventListener('change', () => setDirection(q, { left: sel.value }));
+    const sw = document.createElement('input');
+    sw.inputMode = 'decimal'; sw.size = 7; sw.placeholder = '없음'; sw.value = d.switchT ?? '';
+    sw.setAttribute('aria-label', `${Stats.quarterName(q)} 두 팀이 골대를 바꾸는 시각`);
+    sw.addEventListener('change', () => setDirection(q, { switchT: num(sw.value) }));
+    const src = d.source === '사람' ? '사람이 정함' : d.source === '자동' ? `영상: ${d.how}` : d.how;
+    tr.append(cell(Stats.quarterName(q)), tdOf(sel), cell(nameOf(otherId(d.left))), tdOf(sw),
+      cell(`${src}${d.switchT != null ? ` · ${d.switchT}초부터 반대(${d.switchSource === '사람' ? '사람' : '자동'})` : ''}`, 'l'));
+    if (d.source === '기본') tr.className = 'warn';
+    return tr;
+  }));
+}
+/** The user sets a quarter's attack direction or switch time. Records whose team came from the hoop (automatic
+    shots, free throws, fouls, whistle guesses) change team where the left hoop now has the other team; records a
+    person confirmed or edited change only when the user agrees (they are listed). Numbers put in automatically go:
+    they were looked up in the other team's list (a new analysis finds them again). */
+function setDirection(q, change) {
+  const before = settingsFor(q), old = dirFor(q);
+  const nd = { ...old, ...change, source: '사람', how: '사람이 정함' };
+  if ('switchT' in change) nd.switchSource = change.switchT == null ? null : '사람';
+  S.quarters[q] = { ...(S.quarters[q] || {}), dir: nd };
+  const after = settingsFor(q);
+  const moved = (e) => Stats.teamFor('왼쪽', e.time, before) !== Stats.teamFor('왼쪽', e.time, after);
+  const list = S.events.filter((e) => qOf(e) === q && e.team && !e.derived && moved(e));
+  const autoOnes = list.filter((e) => e.source === '자동' && !e.checked && !e.edited), confirmed = list.filter((e) => !autoOnes.includes(e));
+  const also = confirmed.length > 0 && confirm(`${Stats.quarterName(q)}: 자동 기록 ${autoOnes.length}개는 팀이 바뀝니다. 사람이 확인하거나 고친 기록 ${confirmed.length}개도 바꿀까요?\n${confirmed.slice(0, 8).map(brief).join('\n')}${confirmed.length > 8 ? '\n…' : ''}`);
+  const swapTeam = (e) => {
+    const id = idOf(e.team); if (!id) return;
+    e.team = nameOf(otherId(id)); e.tid = otherId(id);
+    if (e.playerAuto) { e.player = ''; e.playerAuto = false; e.playerGuess = false; }
+  };
+  for (const e of autoOnes) swapTeam(e);
+  if (also) for (const e of confirmed) swapTeam(e);
+  S.history.push({ at: new Date().toISOString(), action: '공격 방향', id: null,
+    before: `${Stats.quarterName(q)} 왼쪽 ${nameOf(old.left)}${old.switchT != null ? `, ${old.switchT}초부터 반대` : ''}`,
+    after: `${Stats.quarterName(q)} 왼쪽 ${nameOf(nd.left)}${nd.switchT != null ? `, ${nd.switchT}초부터 반대` : ''}` });
+  status(`${Stats.quarterName(q)} 공격 방향을 바꿈: 자동 기록 ${autoOnes.length}개의 팀을 바꿈${confirmed.length ? `, 확인된 기록 ${confirmed.length}개는 ${also ? '함께 바꿈' : '그대로 둠'}` : ''}. 자동으로 넣은 번호는 지웠습니다(다시 분석하면 그 팀 명단에서 다시 찾음).`);
+  changed();
+}
+
 /* ------------------------------------------------------------------ tables */
 function cell(text, cls) { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text ?? ''; return td; }
 const selIndex = () => S.events.findIndex((e) => e.id === S.selId);
 function render() {
-  knownTeams = teams();          // names set by the app (loading, team finding) are what the records use
+  knownTeams = teams();
+  renderTeams();          // names set by the app (loading, team finding) are what the records use
   S.events.sort(Stats.byTime);
   const manyQ = Stats.quartersIn(S.events).length > 1 || S.events.some((e) => qOf(e) > 1);
   const tb = $('eventTable').tBodies[0];
@@ -1109,10 +1202,17 @@ function applyWork(s, events) {
   S.analysis = s.analysis || null;
   S.coloursKnown = !!s.colours_known;
   S.removed = Array.isArray(s.removed) ? s.removed : [];
+  S.teamInfo = s.teamInfo && typeof s.teamInfo === 'object' ? { A: {}, B: {}, ...s.teamInfo } : { A: {}, B: {} };
   S.history = Array.isArray(s.history) ? s.history : [];
   // quarters: a record from before them is all the 1st quarter, analysed from the videos it names
   S.quarters = s.quarters && typeof s.quarters === 'object' ? s.quarters
     : (s.video_name || s.flow ? { 1: { ctx: s.flow || null, video_name: s.video_name || '', video_name_b: s.video_name_b || '' } } : {});
+  // saves from before teams A/B: the first team was the one attacking the left hoop (sides) and one switch time
+  for (const [k, x] of Object.entries(S.quarters)) {
+    if (!x || x.dir) continue;
+    if (x.sides) x.dir = { left: x.sides[0] === (s.team_right || '') ? 'B' : 'A', switchT: x.switch_time ?? null, source: '자동', how: '이전 판에서 정함' };
+    else if (Number(k) === 1 && s.switch_time != null && s.switch_time !== '') x.dir = { left: 'A', switchT: Number(s.switch_time), switchSource: '사람', source: '사람', how: '이전 판의 설정' };
+  }
   S.events = events; S.selId = null;
   for (const e of S.events) { if (!e.id) e.id = uid(); if (e.q == null) e.q = 1; }
   // a record saved before team renames were carried over can hold a third team in its rebounds/turnovers: rebuild them
@@ -1123,18 +1223,11 @@ function applyWork(s, events) {
 }
 // Team names as the records know them (kept by render): a name changed after the analysis is changed in the
 // records too (otherwise the rebuilt rebounds and turnovers go to a third team with the new name).
-/** the two teams change ends: names, colours and number lists swap sides (not a rename) */
-function swapSides() {
-  for (const k of ['team', 'color', 'roster']) { const l = $(`${k}_left`).value; $(`${k}_left`).value = $(`${k}_right`).value; $(`${k}_right`).value = l; }
-  knownTeams = teams();
-}
 /** a quarter was chosen: its camera offset and which team attacked which hoop come back (when it was analysed) */
 function restoreQuarter() {
   const x = S.quarters[curQ()];
   if (!x) return;
   if (twoCam() && x.cam_offset != null) $('cam_offset').value = Number(x.cam_offset).toFixed(2);
-  const [l, r] = teams();
-  if (x.sides && x.sides[0] === r && x.sides[1] === l) swapSides();
 }
 function renameTeams() {
   const now = teams(), map = new Map();
@@ -1146,7 +1239,6 @@ function renameTeams() {
     if (map.has(e.team)) e.team = map.get(e.team);
     if (e.reb) e.reb = Object.fromEntries(Object.entries(e.reb).map(([k, v]) => [map.get(k) || k, v]));
   }
-  for (const x of Object.values(S.quarters)) if (x && x.sides) x.sides = x.sides.map((t) => map.get(t) || t);
   return true;
 }
 for (const id of SETTING_IDS) {
@@ -1156,12 +1248,7 @@ for (const id of SETTING_IDS) {
     if (id === 'quarter') restoreQuarter();
     if (id === 'color_left' || id === 'color_right') S.coloursKnown = true;
     if (id === 'cam_offset' && S.quarters[curQ()]) S.quarters[curQ()].cam_offset = settings().cam_offset;
-    if (id === 'switch_time') {
-      // the teams of the automatic shots follow the new switch time (each shot knows its hoop)
-      const s = settings();
-      for (const e of S.events) if (qOf(e) === curQ() && e.side && e.source === '자동' && (e.type === '야투' || e.type === '자유투')) e.team = Stats.teamFor(e.side, e.time, s);
-      changed(); return;
-    }
+    if (id === 'color_left' || id === 'color_right') { const t = S.teamInfo[id === 'color_left' ? 'A' : 'B'] = S.teamInfo[id === 'color_left' ? 'A' : 'B'] || {}; t.colourSource = '사람'; }
     render(); save();
   });
 }

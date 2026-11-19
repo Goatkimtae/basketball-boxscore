@@ -64,25 +64,30 @@
         <span class="muted">처음 가는 체육관만 한 번 하면 됩니다.</span>
       </div>
 
-      <label for="team_left">왼쪽 골대 공격 팀</label>
+      <label for="team_left">팀 A</label>
       <div class="row">
         <input id="team_left" value="빨강" size="12">
-        <select id="color_left" aria-label="왼쪽 골대 공격 팀 색"></select>
+        <select id="color_left" aria-label="팀 A 색"></select>
+        <span id="swatch_left" class="swatch" title="영상에서 찾은 색"></span>
+        <span id="teamInfo_left" class="muted"></span>
       </div>
 
-      <label for="team_right">오른쪽 골대 공격 팀</label>
+      <label for="team_right">팀 B</label>
       <div class="row">
         <input id="team_right" value="남색" size="12">
-        <select id="color_right" aria-label="오른쪽 골대 공격 팀 색"></select>
+        <select id="color_right" aria-label="팀 B 색"></select>
+        <span id="swatch_right" class="swatch" title="영상에서 찾은 색"></span>
+        <span id="teamInfo_right" class="muted"></span>
       </div>
+      <p class="muted span2">팀 이름·색은 비워 두거나 그대로 두면 분석이 영상에서 찾아 채웁니다. 직접 고른 색은 다시 분석해도 바꾸지 않습니다. 기록은 팀 A·B로 묶여 있어 이름을 바꿔도 따라갑니다.</p>
 
-      <label for="roster_left">왼쪽 공격 팀 등번호</label>
+      <label for="roster_left">팀 A 등번호</label>
       <div class="row">
         <input id="roster_left" class="wide" placeholder="예: 1 6 11 12 19" inputmode="numeric">
         <span class="muted">선수 명단(띄어쓰기나 쉼표로 구분). 등번호 넣기 버튼이 됩니다.</span>
       </div>
 
-      <label for="roster_right">오른쪽 공격 팀 등번호</label>
+      <label for="roster_right">팀 B 등번호</label>
       <div class="row">
         <input id="roster_right" class="wide" placeholder="예: 3 7 22 24 33" inputmode="numeric">
       </div>
@@ -93,10 +98,11 @@
         <span class="muted">교체 선수 포함. 자동으로 찾은 등번호가 이보다 많으면 가장 자주 보인 번호만 씁니다(비우면 제한 없음).</span>
       </div>
 
-      <label for="switch_time">공격 방향 바뀌는 시각</label>
-      <div class="row">
-        <input id="switch_time" inputmode="decimal" size="8" placeholder="예: 1200">
-        <span class="muted">초. 한 영상에 전반·후반이 다 있을 때만(비워 두면 분석이 찾아 넣음). 쿼터마다 영상이 따로면 비움 — 쿼터별로 방향을 정합니다</span>
+      <input id="switch_time" type="hidden">
+      <label>공격 방향</label>
+      <div class="span1">
+        <div class="scroll"><table class="grid" id="dirTable"><thead><tr><th>쿼터</th><th>왼쪽 골대 공격</th><th>오른쪽 골대 공격</th><th>바뀌는 시각(초)</th><th class="l">근거</th></tr></thead><tbody></tbody></table></div>
+        <p class="muted">분석이 쿼터마다 영상에서 정합니다(슈터·수비가 서는 자리). 틀리면 고르세요 — 고친 방향은 다시 분석해도 그대로 두고, 그 쿼터 기록의 팀을 다시 맞춥니다. '바뀌는 시각'은 한 영상 안에서 두 팀이 골대를 바꿀 때만(영상 시각, 초).</p>
       </div>
 
       <label for="title">제목</label>

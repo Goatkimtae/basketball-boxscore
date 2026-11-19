@@ -290,11 +290,12 @@
     }
     return [...base, ...derived].sort((a, b) => a.time - b.time);
   }
-  /** derive() quarter by quarter (each quarter is its own video and timeline); ctxOf(q) gives that quarter's ctx */
+  /** derive() quarter by quarter (each quarter has its own timeline); ctxOf(q) gives that quarter's ctx, and s is the
+      settings or a function q -> settings (each quarter has its own attack direction) */
   function deriveQuarters(events, s, ctxOf) {
     const qOf = (e) => Number(e.q) || 1;
     const qs = [...new Set(events.map(qOf))].sort((a, b) => a - b);
-    return qs.flatMap((q) => derive(events.filter((e) => qOf(e) === q), s, ctxOf(q)).map((e) => (e.q === q ? e : { ...e, q })));
+    return qs.flatMap((q) => derive(events.filter((e) => qOf(e) === q), typeof s === 'function' ? s(q) : s, ctxOf(q)).map((e) => (e.q === q ? e : { ...e, q })));
   }
 
   /* ------------------------------------------------------------ after the analysis */

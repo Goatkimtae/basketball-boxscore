@@ -41,3 +41,14 @@ test('rebounds and turnovers are worked out inside each quarter, not across them
   const q2 = out.filter((e) => e.q === 2).map((e) => e.time);
   assert.deepStrictEqual(q2, [...q2].sort((a, b) => a - b));
 });
+
+test('attack direction per quarter: saved, else the nearest quarter with the half-time switch, else A on the left', () => {
+  const qs = { 1: { dir: { left: 'B', source: '자동' } } };
+  assert.strictEqual(Stats.dirOf(qs, 1).left, 'B');
+  assert.strictEqual(Stats.dirOf(qs, 2).left, 'B');                    // same half
+  assert.strictEqual(Stats.dirOf(qs, 3).left, 'A');                    // the other half: other ends
+  assert.strictEqual(Stats.dirOf(qs, 5).left, 'A');                    // overtime like the 4th
+  assert.strictEqual(Stats.dirOf({}, 1).source, '기본');
+  // a quarter only guessed by default does not lead the others
+  assert.strictEqual(Stats.dirOf({ 1: { dir: { left: 'B', source: '기본' } } }, 3).source, '기본');
+});

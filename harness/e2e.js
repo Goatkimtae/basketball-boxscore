@@ -3,7 +3,8 @@
 
      node harness/e2e.js <game key> [--clips left150,right150] [--no-players] [--names] [--rosters "1 2 3|4 5 6"] [--rim-offset dx,dy] [--quarters]
    --quarters: after the first analysis the same clips are chosen again under other names and analysed as the next quarter.
-   --swap (with --quarters): before that, the page's two teams are put on the wrong ends (the app should put them back).
+   --swap (with --quarters): before that, the page's teams A and B change places (names, colours, lists): the record's
+     teams must follow their lists, and the direction table must say the same team attacks the left hoop.
 
    Headless Chromium has no H.264/HEVC decoder: the clips must be VP9 in MP4 (make them with
    make-clips.sh at full resolution; 768-px clips are too small to read numbers). The page is served by
@@ -84,6 +85,10 @@ async function run(game, opt = {}) {
     log.fields = {};
     for (const id of ['team_left', 'color_left', 'roster_left', 'team_right', 'color_right', 'roster_right', 'cam_offset']) log.fields[id] = await page.inputValue(`#${id}`);
     log.records = await page.$$eval('#eventTable tbody tr', (trs) => trs.map((tr) => [...tr.children].slice(0, 6).map((td) => td.textContent)));
+    const dirRows = () => page.$$eval('#dirTable tbody tr', (trs) => trs.map((tr) => [...tr.children].map((td) => (td.querySelector('select') ? td.querySelector('select').selectedOptions[0].textContent : td.querySelector('input') ? td.querySelector('input').value : td.textContent.trim()))));
+    log.dir = await dirRows();
+    log.teamInfo = [await page.textContent('#teamInfo_left'), await page.textContent('#teamInfo_right')];
+    log.reviewSummary = await page.textContent('#reviewSummary');
     // --quarters: the same clips again under other file names, as the next quarter (the app should pick it by itself)
     if (opt.quarters) {
       const os = require('os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hoopstat-q2-'));
@@ -116,6 +121,7 @@ async function run(game, opt = {}) {
       log.box2 = await page.$$eval('#teamTable tr', (trs) => trs.slice(0, 3).map((tr) => [...tr.children].map((td) => td.textContent.trim())));
       await page.click('#tabEvents');
       for (const id of ['team_left', 'color_left', 'team_right', 'color_right']) log.fields[`${id}_q2`] = await page.inputValue(`#${id}`);
+      log.dir2 = await dirRows();
     }
     await page.click('#numBtn'); await page.waitForTimeout(3000);
     log.reviewLeft = log.nothingToReview ? '0' : await page.textContent('#numLeft');
@@ -138,6 +144,8 @@ if (require.main === module) {
     const n = (list, re) => list.filter((r) => re.test(r[2])).length;
     console.log(`shots ${shots.length}: number read ${n(shots, /\(자동\)/)}, guessed ${n(shots, /\(추정\)/)}; rebounds ${rebs.length}: number read ${n(rebs, /\(자동\)/)}, guessed ${n(rebs, /\(추정\)/)}; review left ${log.reviewLeft}`);
     if (log.snap) console.log('rim snap:', log.snap.join(' / '));
+    if (log.dir) console.log('direction table:', JSON.stringify(log.dir), '\nteam info:', JSON.stringify(log.teamInfo), '\nreview:', log.reviewSummary);
+    if (log.dir2) console.log('direction table after the 2nd analysis:', JSON.stringify(log.dir2));
     if (log.players) console.log('direction:', JSON.stringify({ how: log.players.how, score: log.players.dirScore, shooters: log.players.direction, defence: log.players.defence }));
     if (log.status2) {
       console.log(`2nd analysis (quarter picked: ${log.quarter2}, note: ${log.quarterNote}${log.swappedTo ? `, page swapped so the left team was ${log.swappedTo}` : ''}) ${log.seconds2}s: ${log.status2}`);

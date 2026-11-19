@@ -131,3 +131,11 @@ body:not(.two) .two-only { display: none; }
 
 label.check { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 10px; font-weight: 600; }
 label.check .muted { font-weight: 400; }
+.form > .span2 { grid-column: 1 / -1; margin: 0; }
+.form > .span1 { min-width: 0; }
+.swatch { display: inline-block; width: 1.4em; height: 1.4em; border-radius: 4px; border: 1px solid var(--line); vertical-align: middle; }
+.swatch:empty:not([style]) { display: none; }
+#dirTable select, #dirTable input { max-width: 9em; }
+#dirTable td.l { white-space: normal; min-width: 14em; color: var(--muted); font-size: 13px; }
+.warn { color: #b3261e; }
+@media (prefers-color-scheme: dark) { .warn { color: #ff8a80; } }

@@ -147,6 +147,24 @@ function linescore(events, teams) {
 /** records in time order: quarter by quarter */
 const byTime = (a, b) => qOf(a) - qOf(b) || a.time - b.time;
 
+/* ------------------------------------------------------------------ attack direction per quarter
+   quarters[q].dir = {left: 'A'|'B', switchT, source, how}: team A or B attacks the left hoop in that quarter (until
+   switchT, when the two change ends inside the quarter's video). Not set: the nearest quarter that has one (same
+   half: same ends; the other half: the other ends, FIBA 9.5; overtime like the 4th), else team A on the left. */
+function dirOf(quarters, q) {
+  const x = quarters && quarters[q];
+  if (x && x.dir) return x.dir;
+  const half = (k) => (k <= 2 ? 1 : 2), flip = (id) => (id === 'A' ? 'B' : 'A');
+  const ref = Object.entries(quarters || {}).map(([k, v]) => [Number(k), v]).filter(([k, v]) => k !== q && v && v.dir && v.dir.source !== '기본')
+    .sort((a, b) => Math.abs(a[0] - q) - Math.abs(b[0] - q) || a[0] - b[0])[0];
+  if (ref) {
+    const same = half(ref[0]) === half(q);
+    return { left: same ? ref[1].dir.left : flip(ref[1].dir.left), switchT: null, source: '규칙',
+      how: `${quarterName(ref[0])}${same ? '와 같은 방향' : '의 반대(후반에 골대를 바꿈)'}으로 둠` };
+  }
+  return { left: 'A', switchT: null, source: '기본', how: '아직 정하지 않음(팀 A를 왼쪽으로 둠)' };
+}
+
 /* ------------------------------------------------------------------ review state
    Kept apart: was the result (made / missed, kind) confirmed by a person, and how did the number get there
    (read on the shirt, guessed, typed by a person, none). Returns the things still open for one record. */
@@ -223,6 +241,6 @@ function mergeReanalysis(old, auto, q, removed = []) {
   return [...old.filter((e) => e.source !== '자동'), ...fresh].sort(byTime);
 }
 
-const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime, originOf, sameOrigin, tombstone, openItems, playerState, resultState };
+const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime, originOf, sameOrigin, tombstone, openItems, playerState, resultState, dirOf };
 if (typeof window !== 'undefined') window.Stats = Stats;
 if (typeof module !== 'undefined') module.exports = Stats;

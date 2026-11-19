@@ -644,7 +644,7 @@ function findTeams(people) {
     nums = nums.filter(([n, k]) => !(n.length === 1 && nums.some(([o, ko]) => o !== n && o.includes(n) && ko >= TEAM.PART * k)));
     const lab = c.map((v, i) => v / LAB_W[i]);
     return { lab, colour: labToHex(lab), numbers: nums.map(([n]) => n).sort((a, b) => Number(a) - Number(b)),
-      seen: Object.fromEntries(nums), mass: nums.reduce((s, [, k]) => s + k, 0), group: g };
+      seen: Object.fromEntries(nums), mass: nums.reduce((s, [, k]) => s + k, 0), group: g, count: lbl.filter((x) => x === g).length };
   }).sort((a, b) => b.mass - a.mass);
   if (!groups[1] || !groups[1].mass) return null;
   return { teams: [groups[0], groups[1]], others: groups.slice(2), labOf: (lab) => {
