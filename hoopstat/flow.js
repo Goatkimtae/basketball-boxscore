@@ -231,11 +231,37 @@
   }
 
   /** Rebuild the automatic rebounds and turnovers; everything else is kept as it is. */
+  /** Automatic whistle rows (with fixed cameras every whistle-like sound): the team that most likely fouled, as a
+      guess for the quick review. A shot from 3 s before to 1.5 s after the whistle: a shooting foul by its defending
+      team. Otherwise the opponent of the team that had the ball then (most fouls are defensive). Whistle rows are
+      not counted until someone confirms them as a foul. */
+  function guessWhistles(base, timeline, s) {
+    const teams = [s.team_left || '팀 A', s.team_right || '팀 B'];
+    const other = (t) => (t === teams[0] ? teams[1] : teams[0]);
+    const shots = base.filter((e) => e.type === '야투' && teams.includes(e.team));
+    const possAt = (t) => { let p = null; for (const [tt, team] of timeline) if (tt <= t) p = team; return p; };
+    for (const w of base) {
+      if (w.type !== '휘슬' || w.source !== '자동' || (w.team && !w.teamGuess)) continue;
+      if (w.noteBase == null) w.noteBase = w.note || '';
+      const sh = shots.filter((e) => e.time >= w.time - P.FOUL_BEFORE && e.time <= w.time + P.FOUL_AFTER).pop();
+      let team = '', why = '';
+      if (sh) {
+        team = other(sh.team);
+        why = `팀 추정: ${Number(sh.time).toFixed(1)}초 ${sh.team} 슛${(sh.player || '').trim() ? `(${sh.player}번)` : ''} 바로 근처 → 파울이면 수비 팀 ${team}의 슈팅파울로 보임.`;
+      } else {
+        const p = possAt(w.time);
+        if (p && teams.includes(p)) { team = other(p); why = `팀 추정: 그때 공을 가진 ${p}의 상대 팀(대부분의 파울은 수비 파울).`; }
+      }
+      w.team = team; w.teamGuess = !!team; w.guessDetail = team ? (sh ? '슈팅파울' : '개인파울') : '';
+      w.note = why ? `${w.noteBase} ${why}` : w.noteBase;
+    }
+  }
   function derive(events, s, ctx) {
     const isOld = (e) => e.derived && e.source === '자동';
     const old = events.filter(isOld);
     const base = events.filter((e) => !isOld(e)).sort((a, b) => a.time - b.time);
-    const { derived } = possession(base, s, ctx);
+    const { derived, timeline } = possession(base, s, ctx);
+    guessWhistles(base, timeline, s);
     // keep the id and the jersey number of a rebound / turnover that is still there
     for (const d of derived) {
       const k = old.findIndex((o) => o.type === d.type && o.team === d.team && Math.abs(o.time - d.time) <= 1.5);
@@ -347,7 +373,7 @@
     };
   }
 
-  const Flow = { P, segments, timeOn, motionOf, splitPractice, stopped, dropConflicts, possession, derive, infer };
+  const Flow = { P, segments, timeOn, motionOf, splitPractice, stopped, dropConflicts, possession, guessWhistles, derive, infer };
   if (typeof window !== 'undefined') window.Flow = Flow;
   if (typeof module !== 'undefined') module.exports = Flow;
 })(typeof window !== 'undefined' ? window : globalThis);

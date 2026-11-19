@@ -36,7 +36,7 @@ function profileTemplates(name) {
 }
 
 /* ------------------------------------------------------------------ settings */
-const APP_VERSION = 'hoopstat-v10';   // the same as VERSION in sw.js (a test checks)
+const APP_VERSION = 'hoopstat-v11';   // the same as VERSION in sw.js (a test checks)
 /* ------------------------------------------------------------------ settings (continued) */
 const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
@@ -555,7 +555,7 @@ function render() {
     if (e.id === S.selId) tr.className = 'sel';
     const src = cell(''); const pill = document.createElement('span');
     pill.className = `pill ${e.source === '자동' ? 'auto' : 'manual'}`; pill.textContent = e.source || '수동'; src.append(pill);
-    tr.append(cell(Number(e.time).toFixed(1)), cell(e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
+    tr.append(cell(Number(e.time).toFixed(1)), cell(e.teamGuess && e.team ? `${e.team} (추정)` : e.team), cell(e.playerAuto && e.player ? `${e.player} (${e.playerGuess ? '추정' : '자동'})` : e.player), cell(e.type), cell(e.detail),
       cell(e.result, e.result === '성공' ? 'made' : ''), src, cell(e.confidence), cell(e.note, 'note'));
     return tr;
   }));
@@ -738,6 +738,9 @@ async function showScene(id, keepCam) {
     $('kindFt').setAttribute('aria-pressed', String(e.type === '자유투'));
     const [ta, tb] = teams();
     $('whA').textContent = `${ta} 파울`; $('whB').textContent = `${tb} 파울`;
+    // the team the app guessed is marked (one press confirms it)
+    $('whA').setAttribute('aria-pressed', String(wh && !!e.teamGuess && e.team === ta));
+    $('whB').setAttribute('aria-pressed', String(wh && !!e.teamGuess && e.team === tb));
     $('numAsk').textContent = `${e.team} ${isShot(e) ? '슛한' : e.type === '리바운드' ? '공을 잡은' : e.type === '턴오버' ? '공을 잃은' : e.type === '파울' ? '파울한' : ''} 선수 등번호`;
     $('numLeft').textContent = `· 남은 기록 ${left}개`;
     const btns = rosterOf(e.team).map((p) => {
@@ -830,7 +833,8 @@ $('kindFt').addEventListener('click', () => setKind('ft'));
 function whistleIsFoul(team) {
   const e = S.events.find((x) => x.id === S.selId);
   if (!e) return;
-  Object.assign(e, { type: '파울', team, detail: '개인파울', source: '수동', checked: true, confidence: '확인', note: `휘슬 소리를 듣고 사람이 파울로 판단. ${e.note || ''}`.slice(0, 200) });
+  const detail = e.teamGuess && e.team === team && e.guessDetail ? e.guessDetail : '개인파울';
+  Object.assign(e, { type: '파울', team, detail, teamGuess: false, source: '수동', checked: true, confidence: '확인', note: `휘슬 소리를 듣고 사람이 파울로 판단. ${e.noteBase ?? e.note ?? ''}`.slice(0, 200) });
   changed();
   showScene(e.id, true);                              // now ask who fouled
 }

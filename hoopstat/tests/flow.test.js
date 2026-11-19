@@ -133,3 +133,26 @@ test('two fixed cameras: a shot at the empty hoop while the players are at the o
   const [c] = Flow.splitPractice([{ shots: [shot(20, '왼쪽')], track: quiet, offset: 0 }, { shots: [], track: quiet, offset: 0 }]);
   assert.strictEqual(c.practice.length, 0);
 });
+
+test('whistle rows get a guessed team: the defending team of a shot right before, else the opponent of the team with the ball', () => {
+  const s = { team_left: '흰색', team_right: '남색' };
+  const ev = [
+    { time: 10, end: 11, team: '흰색', side: '왼쪽', type: '야투', detail: '2점', result: '실패', source: '자동', player: '33' },
+    { time: 12, team: '', type: '휘슬', source: '자동', note: 'w1' },       // 2 s after a 흰색 shot: 남색's shooting foul
+    { time: 40, end: 41, team: '남색', side: '오른쪽', type: '야투', detail: '2점', result: '성공', source: '자동' },
+    { time: 50, team: '', type: '휘슬', source: '자동', note: 'w2' },       // after 남색 scored, 흰색 has the ball: 남색 fouled
+    { time: 60, team: '남색', type: '휘슬', source: '수동', note: 'w3' },   // set by hand: left alone
+  ];
+  const out = Flow.derive(ev, s, { mode: 'two', segs: [] });
+  const w = (n) => out.find((e) => e.type === '휘슬' && (e.note || '').startsWith(n));
+  assert.strictEqual(w('w1').team, '남색'); assert.ok(w('w1').teamGuess); assert.strictEqual(w('w1').guessDetail, '슈팅파울');
+  assert.match(w('w1').note, /33번/);
+  assert.strictEqual(w('w2').team, '남색'); assert.strictEqual(w('w2').guessDetail, '개인파울');
+  assert.strictEqual(w('w3').team, '남색'); assert.ok(!w('w3').teamGuess);
+  // a guessed team does not count in the box score
+  const box = Stats.boxScore(out, ['흰색', '남색']);
+  assert.strictEqual(Object.fromEntries(box.teams)['남색'].PF, 0);
+  // running it again does not stack the explanation
+  const again = Flow.derive(out, s, { mode: 'two', segs: [] });
+  assert.strictEqual((again.find((e) => (e.note || '').startsWith('w1')).note.match(/팀 추정/g) || []).length, 1);
+});

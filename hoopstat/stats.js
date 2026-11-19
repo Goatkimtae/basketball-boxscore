@@ -56,6 +56,7 @@ function playerSort(a, b) {
 }
 
 function boxScore(events, teams) {
+  events = events.filter((e) => e.type !== '휘슬');      // review markers are not counted, even with a guessed team
   const names = [...teams, ...[...new Set(events.map((e) => e.team).filter(Boolean))].filter((t) => !teams.includes(t)).sort()];
   const out = { teams: [], players: {} };
   for (const t of names) {

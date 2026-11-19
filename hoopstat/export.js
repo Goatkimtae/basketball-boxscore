@@ -113,7 +113,7 @@ function htmlText(events, s) {
     ps.map(([p, st]) => `<tr><td class="l">${esc(/^\d+$/.test(p) ? `#${p}` : p)}</td>${cells(st)}</tr>`).join('')}<tr class="total"><td class="l">팀 합계</td>${cells(T[t])}</tr></tbody></table></div>`).join('');
   const compare = Stats.teamCompare(box, teams).map((r) => `<tr><td class="l">${r.label}</td><td class="${r.key === 'PTS' && r.va > r.vb ? 'pts' : ''}">${r.a}</td><td class="${r.key === 'PTS' && r.vb > r.va ? 'pts' : ''}">${r.b}</td></tr>`).join('');
   const pbp = sorted(events).map((e) => `<tr><td>${Number(e.time).toFixed(1)}</td>${['team', 'player', 'type', 'detail', 'result', 'source']
-    .map((k) => `<td class="l">${esc(e[k])}</td>`).join('')}<td class="why">${esc(e.note)}</td></tr>`).join('');
+    .map((k) => `<td class="l">${esc(k === 'team' && e.teamGuess && e.team ? `${e.team} (추정)` : e[k])}</td>`).join('')}<td class="why">${esc(e.note)}</td></tr>`).join('');
   const notes = Stats.checks(events).map((m) => `<li>${esc(m)}</li>`).join('');
   const sa = T[a] || Stats.tally([]), sb = T[b] || Stats.tally([]);
   const dur = s.duration ? ` · 영상 ${Math.round(s.duration)}초` : '';
