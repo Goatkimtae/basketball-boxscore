@@ -64,3 +64,10 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - `node research/direction/defence.js`: 수비가 자기 골대에 더 가까운가 — 왼쪽 카메라 55장 중 41, 오른쪽 58장 중 46
 - `node research/direction/score.js [--detail]`: 앱의 판단(Players.attackDirection + defenceScore)을 조각마다 — 60초 15개 중 맞음 11·틀림 0(슈터만 5), 150·300초 모두 맞음, 시험 경기에서 바뀌는 시각 잘못 찾음 0
 - 브라우저: `node harness/e2e.js hvn --clips left150,right150 --quarters --swap` — 같은 클립을 다른 이름으로 두 번(2쿼터 자동), 두 번째 전에 팀을 일부러 반대로. 결과: 방향 맞음(수비 20표), 팀 바로잡음, 쿼터별 득점 표, 오류 0
+
+## 2026-11-19 동호회용(v14)
+- 전체 흐름(브라우저): `node harness/flow-e2e.js hvn` — 분석→팀 색 수정→2점을 3점으로·자동 리바운드 삭제→재분석(중복·부활 없음, 색 유지)→방향 변경→작업 저장·다시 열기→HTML·CSV·엑셀→한 영상 2쿼터 구간·경계 이동·연장. 줄마다 ok/FAIL
+- 양쪽 골대 한 카메라: 합성 영상(`research/both-hoops/make.js`로 템플릿, config `both-sim`, 클립 `both150`) → `node harness/engine-run.js both-sim [--single]`, `node research/both-hoops/compare.js [json]` — 이전 방식 14개(왼쪽 0), DualAnalyzer 42개 중 39개가 카메라 2대와 같음, 성공/실패 38/39. 브라우저: `node harness/e2e.js both --both --clips both150`
+- 팀 A/B·두 쿼터·행 바꾸기: `node harness/e2e.js hvn --clips left150,right150 --quarters --swap`
+- 대체 추정 측정: `node research/direction/fallback.js`(가장 자주 읽힌 번호: 슈터 5/20, 리바운더 2/9)
+- 다른 체육관 팀 색: `node harness/players-run.js band-foul --no-shots` 후 findTeams — 어두운 남색·흰색(눈으로 본 것과 같음), 빨간 옷은 따로
