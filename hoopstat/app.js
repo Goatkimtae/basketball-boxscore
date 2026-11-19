@@ -86,6 +86,14 @@ function settingsFor(q) {
 /** records keep their team as A or B (tid): renaming a team renames its records, they never split off */
 function syncTeamIds() {
   const [a, b] = teams();
+  // the two names were exchanged on the page (the rows now hold the other team): the teams did not change, the rows did
+  // -> records, directions and colour notes change rows with them
+  const withA = S.events.filter((e) => e.tid === 'A' && e.team), withB = S.events.filter((e) => e.tid === 'B' && e.team);
+  if (a !== b && withA.length + withB.length > 0 && withA.every((e) => e.team === b) && withB.every((e) => e.team === a)) {
+    for (const e of S.events) if (e.tid === 'A' || e.tid === 'B') e.tid = otherId(e.tid);
+    for (const x of Object.values(S.quarters)) if (x && x.dir) x.dir = { ...x.dir, left: otherId(x.dir.left) };
+    S.teamInfo = { A: S.teamInfo.B || {}, B: S.teamInfo.A || {} };
+  }
   for (const e of S.events) {
     if (e.tid === 'A' || e.tid === 'B') { const n = e.tid === 'A' ? a : b; if (e.team && e.team !== n) e.team = n; }
     else if (e.team) { const id = idOf(e.team); if (id) e.tid = id; }
@@ -630,6 +638,7 @@ async function runAnalysis() {
     ? [{ cam: 'A', name: '왼쪽 골대 영상', file: S.vids.A.file, tpl: { 왼쪽: tpl['왼쪽'] } }, { cam: 'B', name: '오른쪽 골대 영상', file: S.vids.B.file, tpl: { 오른쪽: tpl['오른쪽'] } }]
     : [{ cam: 'A', name: '', file: S.vids.A.file, tpl }];
   const withPlayers = $('auto_players').checked;
+  syncTeamIds();                          // the page's rows as they are now (names exchanged since: the records follow)
   // this analysis belongs to the quarter and files chosen now; a cancel, a new game or an opened work file in the
   // meantime makes it stale and its results are dropped
   const run = { id: ++S.runId, q: curQ(), files: jobs.map((j) => j.file), whole: wholeVideo() };
