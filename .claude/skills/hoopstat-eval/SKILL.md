@@ -58,3 +58,9 @@ description: "HoopStat 하네스 명령 모음과 결과 읽는 법. 엔진 회�
 - 채점(앱과 같은 `Flow.infer`): `node research/whistles/score.js` — 파울 3/3(팀 3/3), 파울 아닌 소리 16개 중 오판 0, 멈춘 뒤 소리 3개 중 0. 규칙을 이 22개로 맞춘 것(표본 안 숫자)
 - 화면 전체 움직임으로 멈춤 판정(두 카메라 합, 휘슬 전 4초 대비)은 멈춤 11개 중 2~5개만 찾음 — 쓰지 않음. 자유투 직전 움직임도 실제 슛과 겹침(`research/whistles/ft.js`)
 - 앱 전체 v12(브라우저, 8분 경기, 10분 14초): 파울 3개(162.8 흰색·406.0 남색·436.3 흰색, 라벨과 같음), 파울한 선수 번호 3개 모두 추정(정답 없음), 자유투 3개 던진 선수 3/3 맞음, 자유투 성공/실패 확인 2개 중 1개(420.3 들어간 것을 실패로 — Node 엔진은 성공), 휘슬 줄 20개 모두 자동 닫힘, 검토할 기록 0. `e2e.js`는 '검토할 기록이 없습니다'를 오류가 아니라 review left 0으로 셈
+
+## 2026-11-19 공격 방향·쿼터
+- 사람 사진에 발 위치(x, y, 768 기준)를 넣음: `node harness/players-run.js hvn-left --no-shots` (사람만 다시, 약 2분)
+- `node research/direction/defence.js`: 수비가 자기 골대에 더 가까운가 — 왼쪽 카메라 55장 중 41, 오른쪽 58장 중 46
+- `node research/direction/score.js [--detail]`: 앱의 판단(Players.attackDirection + defenceScore)을 조각마다 — 60초 15개 중 맞음 11·틀림 0(슈터만 5), 150·300초 모두 맞음, 시험 경기에서 바뀌는 시각 잘못 찾음 0
+- 브라우저: `node harness/e2e.js hvn --clips left150,right150 --quarters --swap` — 같은 클립을 다른 이름으로 두 번(2쿼터 자동), 두 번째 전에 팀을 일부러 반대로. 결과: 방향 맞음(수비 20표), 팀 바로잡음, 쿼터별 득점 표, 오류 0
