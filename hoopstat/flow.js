@@ -172,8 +172,12 @@
     // by: the record that gave the team the ball (a rebound: its player probably brought the ball up)
     const have = (team, t, from = null) => { poss = team; since = t; by = from; timeline.push([t, team]); };
     const mostSeen = (ctx && ctx.mostSeen) || {};
+    // rebounds / turnovers the user deleted (tombstones: the record they follow) are not made again
+    const removed = (ctx && ctx.removed) || [];
+    const gone = (type, of) => !!of && removed.some((r) => r.type === type && r.of === of);
 
     function turnover(team, e) {
+      if (gone('턴오버', e.id)) return;
       let t;
       if (mode === 'pan') {
         // about when the camera turns back toward the end where the next shot happens
@@ -186,7 +190,7 @@
       t = Math.max(Math.min(t, e.time - 1), since);
       // who lost it: not seen; the rebounder who started this possession, else the team's most often seen number
       const who = by && by.team === team && (by.player || '').trim() ? by.player : mostSeen[team] || '';
-      add({ time: t, team, type: '턴오버', side: sideOf(team, t), ...(who ? { player: who, playerAuto: true, playerGuess: true } : {}),
+      add({ time: t, team, type: '턴오버', side: sideOf(team, t), of: e.id, ...(who ? { player: who, playerAuto: true, playerGuess: true } : {}),
         note: `${since.toFixed(1)}초에 공을 가졌는데 다음 슛(${Number(e.time).toFixed(1)}초)은 상대 팀 → 슛 없이 공을 잃음(턴오버). 시각은 추정.`
           + (mode === 'two' ? ' 앱이 이 팀의 슛을 놓쳤을 수도 있으니 장면 보기로 확인.' : ' 스틸이었는지는 장면 보기로 확인.') });
     }
@@ -234,7 +238,8 @@
         if (base.some((f) => f.type === '파울' && f.time >= e.time - 0.5 && f.time <= Math.min(endOf(e) + P.DEAD_AFTER - 1, tNext))) { have(T, e.time); continue; }
         // a rebound the user entered for this miss stands
         if (base.some((f) => f.type === '리바운드' && f.time >= e.time - 0.2 && f.time < tNext && f !== e)) continue;
-        const reb = withPlayer(e, rebound(e, T, next));
+        if (gone('리바운드', e.id)) { poss = null; continue; }      // deleted by the user: who got the ball is not known
+        const reb = { ...withPlayer(e, rebound(e, T, next)), of: e.id };
         add(reb);
         have(reb.team, reb.time, reb);
       } else if (e.type === '파울' || e.type === '턴오버') have(other(T), e.time);

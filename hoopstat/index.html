@@ -135,6 +135,10 @@
     <div id="paneEvents" role="tabpanel" aria-labelledby="tabEvents">
       <div class="toolbar">
         <button id="numBtn" class="primary">빠른 검토(성공·실패·등번호)</button>
+        <select id="reviewWhat" aria-label="검토할 기록">
+          <option value="">확인할 것 전부</option><option value="결과 미확인">결과 미확인 슛</option>
+          <option value="번호">번호 추정·없음</option><option value="휘슬 미판정">휘슬 미판정</option>
+        </select>
         <button id="sceneBtn">장면 보기</button>
         <button id="editBtn">수정…</button>
         <button id="addBtn">사건 추가…</button>
@@ -147,6 +151,7 @@
           <tbody></tbody>
         </table>
       </div>
+      <p id="reviewSummary" class="muted"></p>
       <p id="emptyEvents" class="muted center">아직 기록이 없습니다. 분석을 시작하거나 '사건 추가'로 직접 넣으세요.</p>
     </div>
     <div id="paneBox" role="tabpanel" aria-labelledby="tabBox" hidden>
@@ -155,8 +160,10 @@
         <div class="scroll cmp-wrap"><table class="grid stats compare" id="lineTable"><thead></thead><tbody></tbody></table></div>
       </div>
       <div class="row">
-        <label for="boxQuarter">보기</label>
-        <select id="boxQuarter"><option value="">경기 전체</option></select>
+        <span id="boxQuarterWrap" class="row"><label for="boxQuarter">보기</label>
+        <select id="boxQuarter"><option value="">경기 전체</option></select></span>
+        <label class="check"><input type="checkbox" id="boxGuess" checked> 추정한 번호도 선수 기록에 넣기
+          <span class="muted">끄면 '(추정)' 번호의 기록은 팀 기록에만 들어가고 선수 칸은 '미상'</span></label>
       </div>
       <h3 class="subhead">팀 기록</h3>
       <div class="scroll cmp-wrap"><table class="grid stats compare" id="teamTable"><thead></thead><tbody></tbody></table></div>
@@ -221,6 +228,19 @@
       <span class="grow"></span>
       <button value="cancel" class="ghost">취소</button>
       <button id="pfSave" type="button" class="primary" disabled>저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="newVidDlg" aria-labelledby="newVidTitle">
+  <form method="dialog" class="dlg narrow">
+    <h3 id="newVidTitle">새 영상</h3>
+    <p id="newVidText" class="muted"></p>
+    <div class="row end wrap">
+      <button value="next" class="primary">같은 경기의 다음 쿼터로 추가</button>
+      <button value="replace">지금 쿼터의 영상을 이것으로 바꾸기</button>
+      <button value="new" class="danger">새 경기 시작(지금 기록 지움)</button>
+      <button value="cancel" class="ghost">취소</button>
     </div>
   </form>
 </dialog>

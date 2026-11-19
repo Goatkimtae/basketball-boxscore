@@ -48,6 +48,7 @@ function tally(events) {
 }
 
 const playerOf = (e) => (e.player || '').trim() || '미상';
+const playerOfNoGuess = (e) => (e.playerGuess ? '미상' : playerOf(e));
 function playerSort(a, b) {
   const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
   if (na && nb) return Number(a) - Number(b);
@@ -55,15 +56,17 @@ function playerSort(a, b) {
   return a.localeCompare(b, 'ko');
 }
 
-function boxScore(events, teams) {
+/** opt.guess === false: a guessed number counts for the team but not for that player ('미상') */
+function boxScore(events, teams, opt = {}) {
   events = events.filter((e) => e.type !== '휘슬');      // review markers are not counted, even with a guessed team
+  const who = opt.guess === false ? playerOfNoGuess : playerOf;
   const names = [...teams, ...[...new Set(events.map((e) => e.team).filter(Boolean))].filter((t) => !teams.includes(t)).sort()];
   const out = { teams: [], players: {} };
   for (const t of names) {
     const ev = events.filter((e) => e.team === t);
     out.teams.push([t, tally(ev)]);
-    const ps = [...new Set(ev.map(playerOf))].sort(playerSort);
-    out.players[t] = ps.map((p) => [p, tally(ev.filter((e) => playerOf(e) === p))]);
+    const ps = [...new Set(ev.map(who))].sort(playerSort);
+    out.players[t] = ps.map((p) => [p, tally(ev.filter((e) => who(e) === p))]);
   }
   return out;
 }
@@ -144,18 +147,69 @@ function linescore(events, teams) {
 /** records in time order: quarter by quarter */
 const byTime = (a, b) => qOf(a) - qOf(b) || a.time - b.time;
 
+/* ------------------------------------------------------------------ review state
+   Kept apart: was the result (made / missed, kind) confirmed by a person, and how did the number get there
+   (read on the shirt, guessed, typed by a person, none). Returns the things still open for one record. */
+const NO_PLAYER_TYPES = ['휘슬'];
+function openItems(e) {
+  const out = [];
+  if (e.type === '휘슬') { if (!e.checked) out.push('휘슬 미판정'); return out; }
+  const isShot = e.type === '야투' || e.type === '자유투';
+  if (isShot && e.source === '자동' && !e.checked) out.push('결과 미확인');
+  if (e.team && !NO_PLAYER_TYPES.includes(e.type)) {
+    if (!(e.player || '').trim()) out.push('번호 없음');
+    else if (e.playerGuess) out.push('번호 추정');
+  }
+  return out;
+}
+/** how the number got there, in words */
+function playerState(e) {
+  if (!(e.player || '').trim()) return '없음';
+  if (e.playerAuto) return e.playerGuess ? '추정' : '읽음';
+  return '사람';
+}
+/** how the result got there */
+function resultState(e) {
+  if (!(e.type === '야투' || e.type === '자유투')) return '';
+  return e.checked ? '확인' : e.source === '자동' ? '자동(미확인)' : '사람';
+}
+
+/* ------------------------------------------------------------------ where an automatic record came from
+   origin: the kind of thing found (a shot, a foul …), the camera / hoop and the time. It stays on the record when
+   the user edits it (the record then counts as manual), so a re-analysis that finds the same thing again does not
+   add it a second time. A deleted record leaves a tombstone: an automatic one by its origin, a rebuilt rebound or
+   turnover by the record it follows (of), so neither comes back. */
+const family = (e) => (e.type === '야투' || e.type === '자유투' ? 'shot' : e.type);
+function originOf(e) { return { f: family(e), t: Math.round(e.time * 10) / 10, cam: e.cam || null, side: e.side || null }; }
+function sameOrigin(o, e) {
+  return !!o && o.f === family(e) && Math.abs(o.t - e.time) <= 1 && (!o.cam || !e.cam || o.cam === e.cam) && (!o.side || !e.side || o.side === e.side);
+}
+function tombstone(e) {
+  return { q: qOf(e), type: e.type, team: e.team || '', time: e.time, of: e.of || null,
+    origin: e.origin || (e.source === '자동' && !e.derived ? originOf(e) : null), at: new Date().toISOString() };
+}
+
 /** Replace the automatic records with a new analysis. Manual records are kept. What the user did to
     an automatic record survives when the new analysis finds the same thing (same team, within 1 s):
-    a jersey number is carried over, and a shot the user confirmed keeps its result and kind.
+    a jersey number is carried over, and a shot the user confirmed keeps its result and kind. A record the user
+    edited (manual, with an origin) or deleted (a tombstone in `removed`) is not added again.
     With q, only that quarter is replaced (the new records get q); the other quarters stay as they are. */
-function mergeReanalysis(old, auto, q) {
+function mergeReanalysis(old, auto, q, removed = []) {
   if (q != null) {
     const other = old.filter((e) => qOf(e) !== q);
-    return [...other, ...mergeReanalysis(old.filter((e) => qOf(e) === q), auto.map((e) => ({ ...e, q })))].sort(byTime);
+    return [...other, ...mergeReanalysis(old.filter((e) => qOf(e) === q), auto.map((e) => ({ ...e, q })), null, removed.filter((r) => (r.q || 1) === q))].sort(byTime);
   }
   const shot = (e) => e.type === '야투' || e.type === '자유투';
-  const pool = old.filter((e) => e.source === '자동' && ((e.player || '').trim() || e.checked));
-  const fresh = auto.map((e) => {
+  const edited = old.filter((e) => e.source !== '자동' && e.origin);
+  const dead = removed.filter((r) => r.origin);
+  const kept = auto.map((e) => ({ ...e, origin: e.origin || originOf(e) }))
+    .filter((e) => !edited.some((o) => sameOrigin(o.origin, e)) && !dead.some((r) => sameOrigin(r.origin, e)));
+  // the same automatic record as before keeps its id (rebuilt rebounds and tombstones refer to it)
+  const prevAuto = old.filter((e) => e.source === '자동' && !e.derived && e.id);
+  const pool = old.filter((e) => e.source === '자동' && ((e.player || '').trim() || e.checked || e.userKind));
+  const fresh = kept.map((e0) => {
+    const same = prevAuto.find((o) => sameOrigin(o.origin || originOf(o), e0));
+    const e = same ? { ...e0, id: same.id } : e0;
     const k = pool.findIndex((o) => o.team === e.team && (o.type === e.type || (shot(o) && shot(e))) && Math.abs(o.time - e.time) <= 1);
     if (k < 0) return e;
     const o = pool.splice(k, 1)[0];
@@ -163,11 +217,12 @@ function mergeReanalysis(old, auto, q) {
     // a number typed by hand stays; one read automatically gives way to the new reading
     if ((o.player || '').trim() && (!(e.player || '').trim() || !o.playerAuto)) { out.player = o.player; out.playerAuto = !!o.playerAuto; out.playerGuess = !!o.playerGuess; }
     if (o.checked && shot(e)) Object.assign(out, { type: o.type, detail: o.detail, result: o.result, checked: true, confidence: o.confidence });
+    if (o.userKind && shot(e)) Object.assign(out, { type: o.type, detail: o.detail, userKind: true });
     return out;
   });
   return [...old.filter((e) => e.source !== '자동'), ...fresh].sort(byTime);
 }
 
-const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime };
+const Stats = { TYPES, DETAILS, FT_POINTS, COLS, KO, points, tally, boxScore, teamCompare, fmt, checks, teamFor, shotsToEvents, mergeReanalysis, qOf, quarterName, quartersIn, linescore, byTime, originOf, sameOrigin, tombstone, openItems, playerState, resultState };
 if (typeof window !== 'undefined') window.Stats = Stats;
 if (typeof module !== 'undefined') module.exports = Stats;

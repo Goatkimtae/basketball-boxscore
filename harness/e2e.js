@@ -89,6 +89,10 @@ async function run(game, opt = {}) {
       const os = require('os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hoopstat-q2-'));
       const copy = (f, n) => { const to = path.join(dir, n); fs.copyFileSync(f, to); return to; };
       await page.setInputFiles('#videoInput', copy(clipA, 'second-left.mp4'));
+      // a new video while there are records: the app asks how it joins them -> the next quarter of the same game
+      await page.waitForSelector('#newVidDlg[open]', { timeout: 10000 });
+      log.askedNewVideo = await page.textContent('#newVidText');
+      await page.click('#newVidDlg button[value=next]');
       await page.setInputFiles('#videoInputB', copy(clipB, 'second-right.mp4'));
       await page.waitForTimeout(3000);
       log.quarter2 = await page.inputValue('#quarter');
