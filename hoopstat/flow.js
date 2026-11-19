@@ -304,7 +304,8 @@
     const other = (t) => (t === teams[0] ? teams[1] : teams[0]);
     const teamOf = (side, t) => Stats.teamFor(side, t, s);
     const cams = result.cams && result.cams.length ? result.cams : [{ id: 'A', side: null, track: result.track, offset: 0 }];
-    const two = cams.length >= 2;
+    // one fixed camera showing both hoops works like two fixed cameras (both hoops always covered)
+    const two = cams.length >= 2 || !!result.both;
     const segs = two ? [] : segments(cams[0].track);
     const seen = ['왼쪽', '오른쪽'].filter((sd) => timeOn(segs, sd, -Infinity, Infinity) >= P.FLIP_MIN);
     const mode = two ? 'two' : seen.length === 1 ? 'one' : 'pan';
@@ -405,9 +406,10 @@
       for (const w of whistles) {
         if (w.dur < P.MARK_DUR || fouls.includes(w)) continue;
         if (two) {
-          // judged automatically: no free throw followed, so not counted as a foul (kept closed for the record, not reviewed)
-          add({ time: w.t, team: '', type: '휘슬', checked: true, confidence: '자동',
-            note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz) 뒤 자유투가 없어 파울로 세지 않음(자동). 자유투 없는 파울(일반 파울)이었으면 '수정'에서 파울로 바꾸세요.` });
+          // no free throw followed: not a shooting foul, but it may be a common foul, a violation, the ball out or a
+          // time-out. Not decided: listed as a whistle (not counted) with the team that most likely fouled as a guess
+          add({ time: w.t, team: '', type: '휘슬', confidence: '미판정',
+            note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz). 뒤에 자유투가 없어 슈팅파울은 아님 — 일반 파울·바이얼레이션·아웃·작전타임인지는 정하지 못함(미판정). 빠른 검토에서 파울이면 팀을, 아니면 '파울 아님'.` });
         } else {
           add({ time: w.t, team: '', type: '휘슬',
             note: `휘슬로 보이는 소리(${w.dur.toFixed(1)}초, 약 ${(w.f / 1000).toFixed(1)}kHz). 이 카메라 영상에서는 파울인지 자동으로 가리지 못합니다. 빠른 검토에서 파울이면 팀을 고르고, 아니면 지우세요.` });

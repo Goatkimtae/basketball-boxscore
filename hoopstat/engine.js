@@ -680,5 +680,42 @@ class Analyzer {
   }
 }
 
-if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, MADE, SHOOTER, ballIndex, ballBackFrom, shooterBall, gatherIndex, addGathers, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
-if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, MADE, SHOOTER, ballIndex, ballBackFrom, shooterBall, gatherIndex, addGathers, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };
+/* ---------------------------------------------------------------- one fixed camera showing both hoops
+   Analyzer follows one hoop at a time (the better template match wins in each frame), which suits a camera that
+   follows the ball. When one fixed camera shows both hoops at once, each hoop gets its own Analyzer on the same
+   frames, so a shot at one hoop is not lost while the other hoop matches better. A shot can only be counted twice
+   if the two hoops' areas overlap; two shots at different hoops less than DUAL.SAME s apart keep the one seen
+   longer. */
+const DUAL = { SAME: 1.0 };
+function dedupeShots(left, right) {
+  const all = [...left, ...right].sort((a, b) => a.start - b.start), dropped = [];
+  for (let i = 0; i + 1 < all.length; i++) {
+    const a = all[i], b = all[i + 1];
+    if (a.side === b.side || b.start - a.start >= DUAL.SAME) continue;
+    const lose = (a.frames || 0) >= (b.frames || 0) ? b : a;
+    dropped.push(lose); all.splice(all.indexOf(lose), 1); i = Math.max(-1, i - 2);
+  }
+  return { shots: all, dropped };
+}
+class DualAnalyzer {
+  constructor(templates, variants) {
+    this.parts = HS.SIDES.filter((side) => templates[side]).map((side) => ({ side, an: new Analyzer({ [side]: templates[side] }, variants) }));
+  }
+  /** rgba: cv.Mat; ownership passes to the analyzers (each but the last gets a copy) */
+  push(t, rgba) {
+    this.parts.forEach((p, i) => p.an.push(t, i + 1 < this.parts.length ? rgba.clone() : rgba));
+  }
+  finish() {
+    const res = this.parts.map((p) => ({ side: p.side, r: p.an.finish() }));
+    const by = Object.fromEntries(res.map((x) => [x.side, x.r]));
+    const { shots, dropped } = dedupeShots((by['왼쪽'] || { shots: [] }).shots, (by['오른쪽'] || { shots: [] }).shots);
+    const main = res[0].r;
+    // each hoop's own picture time: share of samples it was found in
+    const hoops = Object.fromEntries(res.map((x) => [x.side, Math.round((1 - x.r.visibility['없음']) * 1000) / 1000]));
+    const visibility = { 왼쪽: hoops['왼쪽'] || 0, 오른쪽: hoops['오른쪽'] || 0, 없음: 1 - Math.max(hoops['왼쪽'] || 0, hoops['오른쪽'] || 0) };
+    return { ...main, shots, visibility, hoops, dualDropped: dropped.length, ballFrames: res.reduce((a, x) => a + x.r.ballFrames, 0), both: true };
+  }
+}
+
+if (typeof self !== 'undefined') Object.assign(self, { HS, WH, MOTION, MADE, SHOOTER, DUAL, ballIndex, ballBackFrom, shooterBall, gatherIndex, addGathers, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, DualAnalyzer, dedupeShots, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility });
+if (typeof module !== 'undefined') module.exports = { HS, WH, MOTION, MADE, SHOOTER, DUAL, ballIndex, ballBackFrom, shooterBall, gatherIndex, addGathers, SceneMotion, onRim, HoopTracker, BallDetector, Analyzer, DualAnalyzer, dedupeShots, WhistleDetector, cameraTrack, trackFilter, groupShots, judgeMade, hoopFromSample, visibility };

@@ -43,6 +43,8 @@ const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color
   'sync_mode', 'video_layout', 'q_count', 'q_len', 'ot_len'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
 const twoCam = () => $('cam_mode').value === 'two';
+/** one fixed camera showing both hoops at once */
+const bothHoops = () => $('cam_mode').value === 'both';
 function settings() {
   const s = {};
   for (const id of SETTING_IDS) s[id] = $(id).value.trim();
@@ -90,7 +92,7 @@ function syncTeamIds() {
   }
 }
 let knownTeams = null;
-const flowCtx = () => S.ctx || { mode: twoCam() ? 'two' : 'pan', segs: [] };
+const flowCtx = () => S.ctx || { mode: twoCam() || bothHoops() ? 'two' : 'pan', segs: [] };
 /** the play-flow ctx of a quarter (filming mode, camera looks): the one saved with its analysis */
 const ctxFor = (q) => ({ ...((S.quarters[q] && S.quarters[q].ctx) || flowCtx()), removed: S.removed.filter((r) => (r.q || 1) === q) });
 /** what the user did to the record (kept in the work file): edits, deletions, additions */
@@ -492,7 +494,14 @@ async function findPlayers(jobs, res, off, run, onProgress) {
     const medOf = (k) => hs.map((h) => h[k]).sort((a, b) => a - b)[Math.floor(hs.length / 2)];
     return { side: vi ? '오른쪽' : '왼쪽', hoop: { x: medOf('x'), y: medOf('y') },
       people: out.filter((_, i) => taskVi[i] === vi).flatMap((r) => r.people).map((p) => ({ ...p, t: clock(j.cam, p.t) })) };
-  }).filter(Boolean) : [];
+  }).filter(Boolean) : bothHoops() ? (() => {
+    const hoopOf = (side) => { const hs = res[0].shots.filter((sh) => sh.side === side && sh.hoop).map((sh) => sh.hoop); if (!hs.length) return null;
+      const medOf = (k) => hs.map((h) => h[k]).sort((a, b) => a - b)[Math.floor(hs.length / 2)]; return { x: medOf('x'), y: medOf('y') }; };
+    const hl = hoopOf('왼쪽'), hr = hoopOf('오른쪽');
+    if (!hl || !hr) return [];
+    const mid = (hl.x + hr.x) / 2, people = out.flatMap((r) => r.people);
+    return [{ side: '왼쪽', hoop: hl, people: people.filter((p) => p.x != null && p.x < mid) }, { side: '오른쪽', hoop: hr, people: people.filter((p) => p.x != null && p.x >= mid) }];
+  })() : [];
   // which found team is team A (the page's first team): its number list first, then its colour
   const ident = found ? identify(found) : null;
   // the attack direction of each quarter (one window: the quarter analysed; a video holding several quarters: each span)
@@ -612,6 +621,7 @@ async function runAnalysis() {
   if (!S.vids.A.file || (two && !S.vids.B.file)) { alert(two ? '왼쪽 골대 영상과 오른쪽 골대 영상을 모두 고르세요.' : '분석할 경기 영상을 고르세요.'); return; }
   const tpl = profileTemplates(s.profile);
   if (!tpl || Object.keys(tpl).length < 1) { alert("체육관 설정이 없습니다. '새로 만들기'에서 영상에 보이는 골대를 한 번 표시해 주세요."); return; }
+  if (bothHoops() && !(tpl['왼쪽'] && tpl['오른쪽'])) { alert("양쪽 골대가 함께 보이는 촬영에는 이 영상에서 왼쪽·오른쪽 골대를 모두 표시한 체육관 설정이 필요합니다. '새로 만들기'에서 두 골대를 하나씩 표시해 주세요."); return; }
   if (two && !(tpl['왼쪽'] && tpl['오른쪽'])) { alert("카메라 2대 분석에는 왼쪽·오른쪽 골대가 모두 표시된 체육관 설정이 필요합니다. '새로 만들기'로 두 영상에서 골대를 하나씩 표시해 주세요."); return; }
   if (!('VideoDecoder' in window)) { alert('이 브라우저는 분석 기능을 지원하지 않습니다. 최신 Edge 또는 Chrome을 쓰세요.'); return; }
   const jobs = two
@@ -637,7 +647,7 @@ async function runAnalysis() {
   };
   let res;
   try {
-    res = await Promise.all(jobs.map((j, i) => runWorker('worker.js', { cmd: 'analyze', file: j.file, templates: j.tpl },
+    res = await Promise.all(jobs.map((j, i) => runWorker('worker.js', { cmd: 'analyze', file: j.file, templates: j.tpl, both: bothHoops() },
       (m) => { prog[i] = { frac: m.frac, eta: m.eta ?? null, label: m.label }; show(); })));
   } catch (err) {
     if (stale()) return;
@@ -720,6 +730,7 @@ async function runAnalysis() {
     S.vids.A.duration = S.vids.A.duration || a.duration;
   } else {
     result = res[0];
+    if (bothHoops()) result.both = true;
   }
   if (withPlayers && S.mostSeen) result.mostSeen = S.mostSeen;
   if (stale()) return;
@@ -754,7 +765,8 @@ async function runAnalysis() {
     : n.mode === 'pan' ? `휘슬로 보이는 소리 ${n.whistles}번 중 경기가 멈춘 ${n.fouls}번을 파울로 판단`
       : n.mode === 'two' ? `휘슬 같은 소리 ${n.whistles}번 중 슛 순간 휘슬 뒤 같은 골대에서 자유투가 나온 ${n.pf}번을 슈팅파울로 판단(나머지는 파울로 세지 않음)`
         : `휘슬 같은 소리 ${n.unknownWhistles}개를 검토 목록에 올림(고정 카메라 1대에서는 파울을 자동으로 가리지 않음)`;
-  const vis = res.map((r, i) => `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`).join(', ');
+  const vis = res.map((r, i) => (r.hoops ? `왼쪽 골대 보임 ${Math.round(100 * (r.hoops['왼쪽'] || 0))}%, 오른쪽 골대 보임 ${Math.round(100 * (r.hoops['오른쪽'] || 0))}%${r.dualDropped ? `(두 골대에서 같은 때 잡힌 슛 ${r.dualDropped}개는 하나로)` : ''}`
+    : `${two ? (i ? '오른쪽 영상 ' : '왼쪽 영상 ') : ''}골대 보임 ${(100 * (1 - r.visibility['없음'])).toFixed(0)}%`)).join(', ');
   status(`${run.whole ? `경기 전체(${windows.map((w) => Stats.quarterName(w.q)).join('·')})` : Stats.quarterName(q)} 분석 끝(${fmtSec((performance.now() - t0) / 1000)}): 야투 ${n.fg}개(성공 ${n.made}) · 자유투 ${n.ft}개 · 리바운드 ${n.reb}개(공격 ${n.oreb}) · `
     + `턴오버 ${n.to}개 · 파울 ${n.pf}개 · ${sound}. ${vis}.${syncNote}${practiceNote}${spanNote}${playersNote ? ` ${playersNote}.` : ''} 다음은 '빠른 검토'.`);
   S.analysis = { version: APP_VERSION, at: new Date().toISOString(), mode: two ? '카메라 2대' : '카메라 1대', players: withPlayers ? '켜짐' : '꺼짐', status: $('status').textContent };
@@ -1331,7 +1343,11 @@ $('xlsxBtn').addEventListener('click', () => {
 $('htmlBtn').addEventListener('click', () => Export.download(`${baseName()}.html`, new Blob([Export.htmlText(S.events, settings())], { type: 'text/html' })));
 $('csvBtn').addEventListener('click', () => Export.download(`${baseName()}.csv`, new Blob([Export.csvText(S.events)], { type: 'text/csv' })));
 $('saveWorkBtn').addEventListener('click', () => {
-  const data = { app: 'HoopStat', version: 2, settings: settings(), events: S.events };
+  // everything needed to go on on another PC: settings (teams, directions, quarters, spans, sync, the files of each
+  // quarter by name and size), the records with their states, deletions and edit history, and the gym profile
+  const st = settings();
+  const data = { app: 'HoopStat', version: 3, appVersion: APP_VERSION, saved: new Date().toISOString(), settings: st, events: S.events,
+    profile: st.profile && profiles()[st.profile] ? { name: st.profile, data: profiles()[st.profile] } : null };
   Export.download(`${baseName()}.hoopstat.json`, new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
 });
 $('openWork').addEventListener('change', async () => {
@@ -1340,8 +1356,11 @@ $('openWork').addEventListener('change', async () => {
   try {
     const d = JSON.parse(await f.text());
     if (d.app !== 'HoopStat') throw new Error('HoopStat 작업 파일이 아닙니다.');
+    // the gym profile travels with the work file: add it here when this browser does not have it
+    if (d.profile && d.profile.name && d.profile.data && !profiles()[d.profile.name]) { const all = profiles(); all[d.profile.name] = d.profile.data; lsSet(LS_PROFILES, all); reloadProfiles(d.profile.name); }
     applyWork(d.settings || {}, d.events || []);
-    status(`작업을 열었습니다: ${f.name}. 장면을 보려면 같은 영상을 1단계에서 골라 주세요.`);
+    const files = Object.entries(S.quarters).filter(([, x]) => x && (x.video || x.video_name)).map(([q, x]) => `${Stats.quarterName(Number(q))}: ${(x.video && x.video.name) || x.video_name}${x.video_b || x.video_name_b ? ` + ${(x.video_b && x.video_b.name) || x.video_name_b}` : ''}`);
+    status(`작업을 열었습니다: ${f.name}. 장면을 보거나 다시 분석하려면 같은 영상을 1단계에서 다시 고르세요(이름·크기로 알아봄)${files.length ? ` — ${files.join(' · ')}` : ''}.`);
   } catch (err) {
     alert(`작업 파일을 열지 못했습니다: ${err.message}`);
   }

@@ -82,7 +82,7 @@ async function audioPipe(mp4, audio) {
   };
 }
 
-async function analyze(file, templates, post, debug) {
+async function analyze(file, templates, post, debug, both) {
   await cvReady;
   post({ type: 'progress', label: '영상 읽는 중', frac: 0 });
   let m;
@@ -115,7 +115,8 @@ async function analyze(file, templates, post, debug) {
 
   const canvas = new OffscreenCanvas(W, H);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const analyzer = new Analyzer(templates, debug && debug.variants);
+  // one fixed camera showing both hoops: each hoop analysed on its own in the same frames
+  const analyzer = both && templates['왼쪽'] && templates['오른쪽'] ? new DualAnalyzer(templates, debug && debug.variants) : new Analyzer(templates, debug && debug.variants);
   analyzer.debug = !!(debug && debug.dets);
   const sound = await audioPipe(m.mp4, m.audio);
   const frames = [];
@@ -186,10 +187,10 @@ async function analyze(file, templates, post, debug) {
 }
 
 self.onmessage = async (ev) => {
-  const { cmd, file, templates, debug } = ev.data;
+  const { cmd, file, templates, debug, both } = ev.data;
   if (cmd !== 'analyze') return;
   try {
-    const result = await analyze(file, templates, (m) => self.postMessage(m), debug);
+    const result = await analyze(file, templates, (m) => self.postMessage(m), debug, both);
     self.postMessage({ type: 'done', result }, result.env ? [result.env.buffer] : []);
   } catch (e) {
     self.postMessage({ type: 'error', message: e instanceof UserError ? e.message : `분석 중 오류가 났습니다: ${e && e.message ? e.message : e}` });

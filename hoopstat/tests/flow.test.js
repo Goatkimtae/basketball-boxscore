@@ -177,7 +177,8 @@ test('two fixed cameras: a whistle at a shot, then the next shot at the same hoo
   assert.strictEqual(ft.length, 1); assert.strictEqual(ft[0].time, 42); assert.strictEqual(ft[0].team, '빨강');
   assert.ok(!events.some((e) => e.type === '야투' && e.time === 28.5));   // the missed fouled shot is not a field goal attempt
   assert.deepStrictEqual(wh.map((e) => e.time), [59.6, 70, 80]);
-  assert.ok(wh.every((e) => e.checked));                // closed automatically, nothing to review
+  assert.ok(wh.every((e) => !e.checked && e.confidence === '미판정'));   // not decided: left for the user, not counted
+  assert.strictEqual(Stats.boxScore(events, ['빨강', '남색']).teams.reduce((a, [, t]) => a + t.PF, 0), 1);
   // no number seen: the fouling team's most often seen number, marked as a guess
   const r2 = Flow.infer({ ...result, shots: [shot(28.5, '왼쪽'), shot(42, '왼쪽', true)] }, S);
   const f2 = r2.events.find((e) => e.type === '파울');
