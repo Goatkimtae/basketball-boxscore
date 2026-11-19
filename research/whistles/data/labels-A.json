@@ -1,0 +1,57 @@
+[
+  {
+    "t": 64.5, "verdict": "stopped", "reason": "out of bounds", "restart": "inbound", "hoop": "left", "fouling_team": null,
+    "confidence": "probable", "sure": false,
+    "note": "Left hoop, white attacking. At 63.2-63.8 a flat pass goes under the rim (it never rises above the rim) and leaves the frame on the left near the baseline, with navy #44 jumping to block it. From 64.0 to 66.5 nobody chases the ball and everyone stands. At 65.3 the ball is tossed back in from off-screen and bounces off the rim; nobody plays it, so this is a dead ball (the engine counts it as the 65.3 'shot'). At about 73.8 navy #44 inbounds from the left baseline to #28 and navy brings the ball up to the right. Out of bounds off white is the likeliest reason; a white foul is also possible."
+  },
+  {
+    "t": 74.7, "verdict": "continued", "reason": null, "restart": "none", "hoop": "left", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "About 1 s after navy's inbound at 73.8, navy #28 dribbles up through the left half and navy keeps attacking at the right hoop at 76-83 with no stop."
+  },
+  {
+    "t": 89.9, "verdict": "continued", "reason": null, "restart": "none", "hoop": "right", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "Right hoop, after a navy miss and a scramble for the loose ball (89.3-90.2). White gets the ball, and white #33 dribbles on a fast break to the left from 90.5, with everyone sprinting."
+  },
+  {
+    "t": 105.7, "verdict": "continued", "reason": null, "restart": "none", "hoop": "left", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "This is during navy's inbound after white's made basket at about 102.7, not a new stop. Navy #77 is holding the ball at the left baseline at 105.2-105.7 and passes to #44 at about 106.0. #44 then dribbles up slowly while white sets up its defence on the right."
+  },
+  {
+    "t": 131.0, "verdict": "continued", "reason": null, "restart": "none", "hoop": "left", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "White #33 brings the ball into the left half and white passes it around the half court from 131 to 135, with navy defending. No one stops."
+  },
+  {
+    "t": 134.5, "verdict": "continued", "reason": null, "restart": "none", "hoop": "left", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "White passes around the half court at the left hoop. A white wing player catches the ball at about 134.0, dribbles and takes a jump shot at about 135.5 (the 135.9 miss). Play goes on."
+  },
+  {
+    "t": 162.8, "verdict": "stopped", "reason": "foul", "restart": "free throw", "hoop": "right", "fouling_team": "white",
+    "confidence": "sure", "sure": true,
+    "note": "Navy #28 drives and shoots at the right hoop at about 162.7 and misses. Afterwards everyone stands or walks and the ball is handed around. On the left camera, at about 167.8-168.8, a man in a red 'SHARK 22' shirt holding something in his hand (maybe a whistle) points to the right. At 172-176 navy #28 stands at the right free-throw line with players lined up on the lane, and shoots at about 176.8 (misses). White takes the rebound and play goes on. I saw only this one free-throw attempt."
+  },
+  {
+    "t": 208.2, "verdict": "stopped", "reason": "unknown", "restart": "inbound", "hoop": "left", "fouling_team": null,
+    "confidence": "probable", "sure": false,
+    "note": "Left hoop. After white's 206.9 miss, white #0 and navy #77 jump together for the rebound at the rim (208.0-208.2), and the ball goes off-screen to the left near the baseline. From 208.5 to about 213 everyone stands or walks. At 214.5 navy #16 comes in from off-screen left dribbling and navy brings the ball up to the right. This could be out of bounds or a foul on the rebound (then by white); I could not see which, and the inbound itself was off-screen."
+  },
+  {
+    "t": 237.0, "verdict": "stopped", "reason": "made basket", "restart": "inbound", "hoop": "left", "fouling_team": null,
+    "confidence": "probable", "sure": false,
+    "note": "Left hoop. A shot from the left edge at 237.0 drops through the rim at about 238.4 (made). After that, white #33 dribbles the ball out and leaves it rolling at about 242.5. A navy player picks it up at 243.5-244.0, and navy brings it up from the left side at about 246 to 247. There was no lane line-up or free throw, so this is not an and-one. The whistle may just be a sound at the moment of the shot."
+  },
+  {
+    "t": 287.3, "verdict": "continued", "reason": null, "restart": "none", "hoop": "left", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "White is in the half court at the left hoop. A contested jump shot at about 288.0 (the 288.1 miss) is followed by a live rebound fight at the rim (289.8-290.8). No stop."
+  },
+  {
+    "t": 291.5, "verdict": "continued", "reason": null, "restart": "none", "hoop": "left", "fouling_team": null,
+    "confidence": "sure", "sure": true,
+    "note": "There is a loose-ball scramble low near the left lane (navy holding the ball low, a white player reaching in, 290.9-291.7). A white player in blue shorts comes out with the ball and dribbles away at about 292.0-293. White keeps passing in the half court (296.5-302). There was no inbound and no free throw."
+  }
+]
