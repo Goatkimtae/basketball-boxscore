@@ -61,6 +61,7 @@ async function run(game, opt = {}) {
       const [cw, ch] = await page.$eval('#pfCanvas', (cv) => [cv.width, cv.height]);
       await page.mouse.click(box.x + (x * box.width) / cw, box.y + (y * box.height) / ch);
       await page.waitForTimeout(1500);
+      (log.snap = log.snap || []).push(await page.textContent('#pfSnapNote').catch(() => ''));
     };
     // --rim-offset dx,dy: click beside the rim (how sensitive is the analysis to a careless click?)
     const [odx, ody] = (opt.rimOffset || '0,0').split(',').map(Number), off = ([x, y]) => [x + odx, y + ody];
@@ -100,6 +101,7 @@ if (require.main === module) {
     const rebs = log.records.filter((r) => r[3] === '리바운드');
     const n = (list, re) => list.filter((r) => re.test(r[2])).length;
     console.log(`shots ${shots.length}: number read ${n(shots, /\(자동\)/)}, guessed ${n(shots, /\(추정\)/)}; rebounds ${rebs.length}: number read ${n(rebs, /\(자동\)/)}, guessed ${n(rebs, /\(추정\)/)}; review left ${log.reviewLeft}`);
+    if (log.snap) console.log('rim snap:', log.snap.join(' / '));
     console.log('errors:', log.errors.length ? log.errors.join('\n') : 'none');
     console.log('->', path.relative(H.ROOT, file));
     process.exit(log.errors.length ? 1 : 0);

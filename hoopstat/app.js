@@ -36,7 +36,7 @@ function profileTemplates(name) {
 }
 
 /* ------------------------------------------------------------------ settings */
-const APP_VERSION = 'hoopstat-v9';   // the same as VERSION in sw.js (a test checks)
+const APP_VERSION = 'hoopstat-v10';   // the same as VERSION in sw.js (a test checks)
 /* ------------------------------------------------------------------ settings (continued) */
 const SETTING_IDS = ['cam_mode', 'team_left', 'color_left', 'team_right', 'color_right', 'roster_left', 'roster_right', 'team_size', 'switch_time', 'cam_offset', 'title'];
 const num = (v) => { const x = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : null; };
@@ -198,7 +198,7 @@ $('newProfileBtn').addEventListener('click', async () => {
       : '먼저 이 체육관에서 찍은 경기 영상을 고르세요. 그 영상에서 골대 위치를 표시합니다.');
     return;
   }
-  PF.t = 0; PF.cam = 'A'; PF.tBy = { A: 0, B: 0 }; PF.marks = {};
+  PF.t = 0; PF.cam = 'A'; PF.tBy = { A: 0, B: 0 }; PF.marks = {}; $('pfSnapNote').textContent = '';
   for (const side of SIDES) $(`thumb${side}`).getContext('2d').clearRect(0, 0, 168, 140);
   $('pfSave').disabled = true;
   document.querySelector('input[name=pfSide][value=왼쪽]').checked = true;
@@ -219,14 +219,21 @@ for (const b of document.querySelectorAll('[data-jump]')) {
 $('pfCanvas').addEventListener('click', (ev) => {
   if (!PF.ctx) return;
   const c = $('pfCanvas');
-  const x = Math.round((ev.offsetX * c.width) / c.clientWidth), y = Math.round((ev.offsetY * c.height) / c.clientHeight);
+  const cx0 = Math.round((ev.offsetX * c.width) / c.clientWidth), cy0 = Math.round((ev.offsetY * c.height) / c.clientHeight);
   const side = pfSide(), cam = PF.cam, t = PF.t;
-  // template = TW x TH gray patch whose centre sits RIM_DY*TH above the clicked rim centre
-  const cx = x, cy = y - RIM_DY * TH;
-  const x0 = Math.round(Math.min(Math.max(cx - TW / 2, 0), c.width - TW));
-  const y0 = Math.round(Math.min(Math.max(cy - TH / 2, 0), c.height - TH));
   // re-grab without marks drawn
   grab(t, document.createElement('canvas'), cam).then((clean) => {
+    // the analysis takes the rim at a fixed place in the hoop picture: move the click onto the rim found near it
+    let x = cx0, y = cy0, note = '';
+    if ($('pfSnap').checked) {
+      const s = RimSnap.snapRim(clean.getImageData(0, 0, clean.canvas.width, clean.canvas.height).data, clean.canvas.width, clean.canvas.height, cx0, cy0);
+      if (s.snapped) { x = s.x; y = s.y; note = s.moved ? `${side} 골대: 누른 곳에서 ${s.moved}칸 옮겨 림 한가운데에 맞췄습니다.` : `${side} 골대: 림 한가운데를 눌렀습니다.`; }
+      else note = `${side} 골대: 누른 곳 가까이에서 림을 찾지 못해 누른 곳을 그대로 씁니다. 림 한가운데를 정확히 눌러 주세요.`;
+    }
+    $('pfSnapNote').textContent = note;
+    // template = TW x TH gray patch whose centre sits RIM_DY*TH above the rim centre
+    const x0 = Math.round(Math.min(Math.max(x - TW / 2, 0), c.width - TW));
+    const y0 = Math.round(Math.min(Math.max(y - RIM_DY * TH - TH / 2, 0), c.height - TH));
     const g = grayCrop(clean, x0, y0, TW, TH);
     PF.marks[side] = { t, cam, x, y, tpl: g };
     const th = $(`thumb${side}`).getContext('2d');
